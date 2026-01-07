@@ -34,8 +34,16 @@ def evaluate_worker(args_tuple):
     """
     平行運算的 worker 函數
     每個 worker 進程會有自己的 OpenVSP 實例
+    使用唯一臨時目錄避免檔案衝突
     """
+    import tempfile
+    import shutil
+
     gene_array, gen, ind, vsp_dir, W_area_penalty, gene_bounds = args_tuple
+    name = f"gen{gen:03d}_ind{ind:03d}"
+
+    # 創建唯一的臨時工作目錄（避免檔案衝突）
+    temp_dir = tempfile.mkdtemp(prefix=f"vsp_{name}_")
 
     try:
         # 每個進程獨立導入 openvsp
@@ -53,9 +61,8 @@ def evaluate_worker(args_tuple):
         if not passed:
             return 1e6, None
 
-        # 3. 生成 VSP 模型
-        name = f"gen{gen:03d}_ind{ind:03d}"
-        vsp_path = os.path.join(vsp_dir, f"{name}.vsp3")
+        # 3. 生成 VSP 模型（在臨時目錄）
+        vsp_path = os.path.join(temp_dir, f"{name}.vsp3")
 
         try:
             VSPModelGenerator.create_fuselage(curves, name, vsp_path)
@@ -73,8 +80,8 @@ def evaluate_worker(args_tuple):
             vsp.SetDoubleAnalysisInput("ParasiteDrag", "Mu", [1.7894e-5])
             vsp.ExecAnalysis("ParasiteDrag")
 
-            # 解析 CSV
-            csv_file = os.path.join(vsp_dir, f"{name}_ParasiteBuildUp.csv")
+            # 解析 CSV（在臨時目錄）
+            csv_file = os.path.join(temp_dir, f"{name}_ParasiteBuildUp.csv")
 
             if os.path.exists(csv_file):
                 with open(csv_file, 'r', encoding='utf-8') as f:
@@ -125,6 +132,13 @@ def evaluate_worker(args_tuple):
 
     except Exception as e:
         return 1e6, f"Worker錯誤: {e}"
+
+    finally:
+        # 清理臨時目錄
+        try:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except:
+            pass
 
 
 def load_config(config_path: str) -> dict:
