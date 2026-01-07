@@ -4,6 +4,7 @@ HPA 整流罩 GA 優化運行腳本
 使用方法：
     python scripts/run_ga.py --gen 50 --pop 20
     python scripts/run_ga.py --config config/ga_config.json
+    python scripts/run_ga.py --gen 100 --pop 30 --tol 5  # 5代不改善就停止
 """
 
 import sys
@@ -70,39 +71,6 @@ def plot_convergence(history: list, output_path: str):
         print("Warning: matplotlib 未安裝，跳過收斂曲線繪製")
 
 
-def plot_parameter_distribution(population: list, gene_names: list, output_path: str):
-    """繪製參數分布"""
-    try:
-        import matplotlib.pyplot as plt
-
-        n_params = len(gene_names)
-        n_cols = 4
-        n_rows = (n_params + n_cols - 1) // n_cols
-
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(16, n_rows * 3))
-        axes = axes.flatten()
-
-        for i, name in enumerate(gene_names):
-            values = [ind[name] for ind in population]
-            axes[i].hist(values, bins=15, edgecolor='black', alpha=0.7)
-            axes[i].set_title(name)
-            axes[i].set_xlabel('Value')
-            axes[i].set_ylabel('Count')
-
-        # 隱藏多餘的子圖
-        for i in range(n_params, len(axes)):
-            axes[i].set_visible(False)
-
-        plt.tight_layout()
-        plt.savefig(output_path, dpi=150)
-        plt.close()
-
-        print(f"參數分布圖已保存: {output_path}")
-
-    except ImportError:
-        print("Warning: matplotlib 未安裝，跳過參數分布圖繪製")
-
-
 def run_optimization(args):
     """運行 GA 優化"""
 
@@ -128,13 +96,15 @@ def run_optimization(args):
     n_gen = args.gen or config.get('ga_settings', {}).get('n_generations', 50)
     pop_size = args.pop or config.get('ga_settings', {}).get('population_size', 20)
     seed = args.seed or config.get('ga_settings', {}).get('seed', 42)
+    convergence_tol = args.tol or 10  # 預設10代不改善就停止
 
     print(f"\n{'='*60}")
     print(f"HPA 整流罩 GA 優化")
     print(f"{'='*60}")
-    print(f"代數: {n_gen}")
+    print(f"代數上限: {n_gen}")
     print(f"族群大小: {pop_size}")
     print(f"隨機種子: {seed}")
+    print(f"收斂容忍度: {convergence_tol} 代不改善則停止")
     print(f"{'='*60}\n")
 
     # 檢查 pymoo
@@ -145,6 +115,7 @@ def run_optimization(args):
         from pymoo.operators.sampling.rnd import FloatRandomSampling
         from pymoo.operators.crossover.sbx import SBX
         from pymoo.operators.mutation.pm import PM
+        from pymoo.core.callback import Callback
     except ImportError:
         print("錯誤: 需要安裝 pymoo")
         print("請執行: pip install pymoo")
@@ -152,7 +123,7 @@ def run_optimization(args):
 
     # 創建專案管理器
     pm = ProjectManager(base_output_dir="output")
-    pm.log(f"開始 GA 優化: {n_gen} 代, 族群大小 {pop_size}")
+    pm.log(f"開始 GA 優化: 最多 {n_gen} 代, 族群大小 {pop_size}")
 
     # 保存配置
     with open(pm.log_dir / 'config_used.json', 'w', encoding='utf-8') as f:
@@ -165,8 +136,11 @@ def run_optimization(args):
     # 創建優化器
     optimizer = HPA_Optimizer(pm)
 
-    # 收斂歷史
+    # 收斂歷史和追蹤
     convergence_history = []
+    best_so_far = float('inf')
+    generations_without_improvement = 0
+    should_terminate = False
 
     # 定義問題
     class HPAProblem(Problem):
@@ -179,40 +153,76 @@ def run_optimization(args):
                 xl=lower,
                 xu=upper
             )
-            self.generation = 0
-            self.individual_counter = 0
-            self.gen_fitness = []
 
         def _evaluate(self, X, out, *args, **kwargs):
+            nonlocal best_so_far, generations_without_improvement, should_terminate
+
             fitness = []
             for i, x in enumerate(X):
-                f = optimizer.evaluate_individual(x, self.generation, self.individual_counter)
+                f = optimizer.evaluate_individual(x, callback.n_gen, i)
                 fitness.append(f)
-                self.gen_fitness.append(f)
-                self.individual_counter += 1
 
             out["F"] = np.array(fitness).reshape(-1, 1)
 
-            # 每代結束後記錄
-            if self.individual_counter >= pop_size:
-                valid_fitness = [f for f in self.gen_fitness if f < 1e5]
-                if valid_fitness:
-                    convergence_history.append({
-                        'generation': self.generation,
-                        'best_fitness': min(valid_fitness),
-                        'avg_fitness': sum(valid_fitness) / len(valid_fitness),
-                        'feasible_count': len(valid_fitness)
-                    })
-                    pm.log(f"Gen {self.generation}: Best={min(valid_fitness):.4f}N, "
-                           f"Avg={sum(valid_fitness)/len(valid_fitness):.4f}N, "
-                           f"Feasible={len(valid_fitness)}/{pop_size}")
+    # 定義回調函數（用於收斂檢測）
+    class ConvergenceCallback(Callback):
+        def __init__(self):
+            super().__init__()
+            self.n_gen = 0
+            self.best_history = []
 
-                self.generation += 1
-                self.individual_counter = 0
-                self.gen_fitness = []
+        def notify(self, algorithm):
+            nonlocal best_so_far, generations_without_improvement, should_terminate
 
-    # 創建問題實例
+            self.n_gen += 1
+
+            # 獲取當前最佳適應度
+            current_best = algorithm.pop.get("F").min()
+            valid_fitness = [f for f in algorithm.pop.get("F").flatten() if f < 1e5]
+
+            if valid_fitness:
+                current_best = min(valid_fitness)
+                current_avg = sum(valid_fitness) / len(valid_fitness)
+            else:
+                current_best = 1e6
+                current_avg = 1e6
+
+            # 記錄收斂歷史
+            convergence_history.append({
+                'generation': self.n_gen,
+                'best_fitness': current_best,
+                'avg_fitness': current_avg,
+                'feasible_count': len(valid_fitness),
+                'pop_size': len(algorithm.pop)
+            })
+
+            # 檢查是否改善
+            if current_best < best_so_far * 0.999:  # 0.1% 改善才算
+                best_so_far = current_best
+                generations_without_improvement = 0
+                pm.log(f"Gen {self.n_gen}: Best={current_best:.4f}N ⬇️ (改善!)")
+            else:
+                generations_without_improvement += 1
+                pm.log(f"Gen {self.n_gen}: Best={current_best:.4f}N "
+                       f"(無改善 {generations_without_improvement}/{convergence_tol})")
+
+            # 檢查收斂條件
+            if generations_without_improvement >= convergence_tol:
+                pm.log(f"\n🎯 收斂！連續 {convergence_tol} 代無改善，提前終止")
+                should_terminate = True
+                algorithm.termination.force_termination = True
+
+            # 每5代保存一次收斂曲線
+            if self.n_gen % 5 == 0 and convergence_history:
+                plot_convergence(convergence_history, str(pm.log_dir / 'convergence.png'))
+
+                # 保存收斂歷史
+                with open(pm.log_dir / 'convergence_history.json', 'w', encoding='utf-8') as f:
+                    json.dump(convergence_history, f, indent=2)
+
+    # 創建問題和回調
     problem = HPAProblem()
+    callback = ConvergenceCallback()
 
     # 設置 GA 演算法
     algorithm = GA(
@@ -234,7 +244,8 @@ def run_optimization(args):
         problem,
         algorithm,
         ('n_gen', n_gen),
-        verbose=True,
+        callback=callback,
+        verbose=False,  # 使用自己的日誌
         seed=seed
     )
 
@@ -245,13 +256,13 @@ def run_optimization(args):
     best_gene = optimizer.array_to_gene(res.X)
     best_fitness = float(res.F[0])
 
-    pm.save_best_gene(best_gene, best_fitness, n_gen)
+    pm.save_best_gene(best_gene, best_fitness, callback.n_gen)
 
-    # 保存收斂歷史
+    # 最終保存收斂歷史
     with open(pm.log_dir / 'convergence_history.json', 'w', encoding='utf-8') as f:
         json.dump(convergence_history, f, indent=2)
 
-    # 繪製收斂曲線
+    # 繪製最終收斂曲線
     if convergence_history:
         plot_convergence(convergence_history, str(pm.log_dir / 'convergence.png'))
 
@@ -265,7 +276,9 @@ def run_optimization(args):
     pm.log(f"\n{'='*60}")
     pm.log(f"優化完成！")
     pm.log(f"{'='*60}")
+    pm.log(f"實際運行代數: {callback.n_gen}")
     pm.log(f"總耗時: {elapsed:.1f} 秒")
+    pm.log(f"收斂狀態: {'提前收斂' if should_terminate else '達到最大代數'}")
     pm.log(f"最佳適應度: {best_fitness:.4f} N")
     pm.log(f"最佳基因:")
     for key, value in best_gene.items():
@@ -273,6 +286,7 @@ def run_optimization(args):
     pm.log(f"")
     pm.log(f"輸出目錄: {pm.run_dir}")
     pm.log(f"最佳模型: {best_vsp_path}")
+    pm.log(f"收斂曲線: {pm.log_dir / 'convergence.png'}")
     pm.log(f"{'='*60}")
 
     return res, pm, convergence_history
@@ -280,9 +294,10 @@ def run_optimization(args):
 
 def main():
     parser = argparse.ArgumentParser(description='HPA 整流罩 GA 優化')
-    parser.add_argument('--gen', type=int, help='GA 代數')
+    parser.add_argument('--gen', type=int, help='GA 代數上限')
     parser.add_argument('--pop', type=int, help='族群大小')
     parser.add_argument('--seed', type=int, help='隨機種子')
+    parser.add_argument('--tol', type=int, help='收斂容忍度（連續N代不改善則停止）')
     parser.add_argument('--config', type=str, help='GA 配置檔案路徑')
     parser.add_argument('--fluid', type=str, help='流體條件配置檔案路徑')
 

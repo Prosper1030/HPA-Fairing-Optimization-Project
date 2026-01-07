@@ -801,24 +801,18 @@ class HPA_Optimizer:
 
                         if len(values) >= 2:
                             try:
-                                # values[0] = f (m²), values[1] = Cd
+                                # values[0] = f (drag area, m²), values[1] = Cd
+                                # f = Cd * Sref，由於 Sref = 1.0 m²，所以 f = Cd
                                 f_value = float(values[0])
                                 cd = float(values[1])
 
-                                # 從主數據行獲取 Swet
-                                for data_line in lines:
-                                    if name in data_line and ',' in data_line:
-                                        data_parts = [p.strip() for p in data_line.split(',')]
-                                        if len(data_parts) > 1:
-                                            swet = float(data_parts[1])
-                                            break
-                                else:
-                                    swet = 0.0
+                                # 阻力計算：Drag = q * Sref * Cd = q * f
+                                # ⚠️ 修正：使用 f (drag area) 而非 Swet * Cd
+                                q = 0.5 * 1.225 * (6.5 ** 2)  # 動壓 (Pa)
+                                Sref = 1.0  # 參考面積 (m²)
+                                drag = q * Sref * cd  # 或等效於 q * f_value
 
-                                q = 0.5 * 1.225 * (6.5 ** 2)
-                                drag = q * swet * cd
-
-                                self.pm.log(f"{name}: Cd={cd:.6f}, Swet={swet:.3f}m², Drag={drag:.4f}N")
+                                self.pm.log(f"{name}: Cd={cd:.6f}, f={f_value:.6f}m², Drag={drag:.4f}N")
                                 return drag
                             except Exception as parse_err:
                                 self.pm.log(f"CSV 解析錯誤: {parse_err}, line={line}")
