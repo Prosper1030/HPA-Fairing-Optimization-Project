@@ -3,142 +3,37 @@ HPA 整流罩 GA 優化運行腳本
 
 使用方法：
     python scripts/run_ga.py --gen 50 --pop 20
+    python scripts/run_ga.py --gen 50 --pop 20 --workers 10  # 10進程平行
     python scripts/run_ga.py --config config/ga_config.json
-    python scripts/run_ga.py --gen 100 --pop 30 --tol 5  # 5代不改善就停止
-    python scripts/run_ga.py --gen 50 --pop 20 --workers 4  # 4進程平行運算
+
+架構說明：
+    - 主程式（本檔案）：不導入 OpenVSP，只負責 GA 調度
+    - Worker 腳本（run_one_case.py）：獨立進程，負責 VSP 計算
+    - 平行運算：透過 subprocess 呼叫多個獨立 worker
 """
 
 import sys
 import os
 import json
 import argparse
+import subprocess
 import numpy as np
 from datetime import datetime
 from pathlib import Path
-from multiprocessing import Pool, cpu_count
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # 添加專案路徑
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.join(project_root, 'src'))
 
+# 導入優化器模組
 from optimization.hpa_asymmetric_optimizer import (
-    HPA_Optimizer, ProjectManager, CST_Modeler,
-    VSPModelGenerator, ConstraintChecker
+    HPA_Optimizer, ProjectManager, CST_Modeler, ConstraintChecker
 )
 
-
-# ==========================================
-# 平行運算 Worker 函數（必須在模組層級）
-# ==========================================
-def evaluate_worker(args_tuple):
-    """
-    平行運算的 worker 函數
-    每個 worker 進程會有自己的 OpenVSP 實例
-    使用唯一臨時目錄避免檔案衝突
-    """
-    import tempfile
-    import shutil
-
-    gene_array, gen, ind, vsp_dir, W_area_penalty, gene_bounds = args_tuple
-    name = f"gen{gen:03d}_ind{ind:03d}"
-
-    # 創建唯一的臨時工作目錄（避免檔案衝突）
-    temp_dir = tempfile.mkdtemp(prefix=f"vsp_{name}_")
-
-    try:
-        # 每個進程獨立導入 openvsp
-        import openvsp as vsp
-
-        # 轉換基因陣列為字典
-        keys = list(gene_bounds.keys())
-        gene = {k: gene_array[i] for i, k in enumerate(keys)}
-
-        # 1. 生成幾何曲線
-        curves = CST_Modeler.generate_asymmetric_fairing(gene)
-
-        # 2. 檢查限制（快速篩選）
-        passed, results = ConstraintChecker.check_all_constraints(gene, curves)
-        if not passed:
-            return 1e6, None
-
-        # 3. 生成 VSP 模型（在臨時目錄）
-        vsp_path = os.path.join(temp_dir, f"{name}.vsp3")
-
-        try:
-            VSPModelGenerator.create_fuselage(curves, name, vsp_path)
-        except Exception as e:
-            return 1e6, f"VSP生成失敗: {e}"
-
-        # 4. 計算阻力
-        try:
-            vsp.ClearVSPModel()
-            vsp.ReadVSPFile(vsp_path)
-
-            vsp.SetAnalysisInputDefaults("ParasiteDrag")
-            vsp.SetDoubleAnalysisInput("ParasiteDrag", "Rho", [1.225])
-            vsp.SetDoubleAnalysisInput("ParasiteDrag", "Vinf", [6.5])
-            vsp.SetDoubleAnalysisInput("ParasiteDrag", "Mu", [1.7894e-5])
-            vsp.ExecAnalysis("ParasiteDrag")
-
-            # 解析 CSV（在臨時目錄）
-            csv_file = os.path.join(temp_dir, f"{name}_ParasiteBuildUp.csv")
-
-            if os.path.exists(csv_file):
-                with open(csv_file, 'r', encoding='utf-8') as f:
-                    lines = f.readlines()
-
-                # 解析 Swet
-                swet = None
-                found_header = False
-                for line in lines:
-                    if 'Component Name' in line and 'S_wet' in line:
-                        found_header = True
-                        continue
-                    if found_header and line.strip():
-                        parts = [p.strip() for p in line.split(',')]
-                        if len(parts) >= 2:
-                            try:
-                                swet = float(parts[1])
-                                break
-                            except:
-                                pass
-
-                # 解析 Totals
-                for line in lines:
-                    if 'Totals:' in line:
-                        parts = [p.strip() for p in line.split(',')]
-                        values = [p for p in parts if p and p != 'Totals:']
-                        if len(values) >= 2:
-                            try:
-                                cd = float(values[1])
-                                q = 0.5 * 1.225 * (6.5 ** 2)
-                                drag = q * 1.0 * cd
-
-                                if swet is not None:
-                                    area_penalty = W_area_penalty * swet
-                                    score = drag + area_penalty
-                                    msg = f"{name}: Cd={cd:.6f}, Swet={swet:.3f}m², Drag={drag:.4f}N, Penalty={area_penalty:.4f}N, Score={score:.4f}N"
-                                    return score, msg
-                                else:
-                                    msg = f"{name}: Cd={cd:.6f}, Drag={drag:.4f}N (無Swet)"
-                                    return drag, msg
-                            except:
-                                pass
-
-            return 1e6, f"{name}: CSV解析失敗"
-
-        except Exception as e:
-            return 1e6, f"{name}: 阻力計算失敗 - {e}"
-
-    except Exception as e:
-        return 1e6, f"Worker錯誤: {e}"
-
-    finally:
-        # 清理臨時目錄
-        try:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-        except:
-            pass
+# Worker 腳本路徑
+WORKER_SCRIPT = os.path.join(os.path.dirname(__file__), 'run_one_case.py')
+PYTHON_EXE = sys.executable  # 使用當前 Python 解釋器
 
 
 def load_config(config_path: str) -> dict:
@@ -187,6 +82,99 @@ def plot_convergence(history: list, output_path: str):
         print("Warning: matplotlib 未安裝，跳過收斂曲線繪製")
 
 
+def call_worker(gene_dict: dict, name: str, W_area_penalty: float) -> tuple:
+    """
+    呼叫獨立 worker 進程評估一個個體
+
+    Returns:
+        (score, log_message)
+    """
+    try:
+        # 將基因轉為 JSON 字串
+        gene_json = json.dumps(gene_dict)
+
+        # 呼叫 worker 腳本
+        result = subprocess.run(
+            [PYTHON_EXE, WORKER_SCRIPT,
+             '--gene', gene_json,
+             '--name', name,
+             '--penalty', str(W_area_penalty)],
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='replace',  # 處理非 UTF-8 字元
+            timeout=120  # 2分鐘超時
+        )
+
+        # 解析 stdout 獲取分數
+        stdout = result.stdout.strip()
+        stderr = result.stderr.strip()
+
+        # 找到 "SCORE:xxx" 行
+        score = 1e6
+        for line in stdout.split('\n'):
+            if line.startswith('SCORE:'):
+                try:
+                    score = float(line.split(':')[1])
+                except:
+                    pass
+                break
+
+        # stderr 包含日誌訊息
+        log_msg = stderr if stderr else None
+
+        return score, log_msg
+
+    except subprocess.TimeoutExpired:
+        return 1e6, f"{name}: 超時"
+    except Exception as e:
+        return 1e6, f"{name}: Worker呼叫失敗 - {e}"
+
+
+def evaluate_population_parallel(population, gen, gene_bounds, W_area_penalty, n_workers, pm, optimizer=None):
+    """
+    評估整個族群
+
+    Args:
+        population: 族群基因陣列 (N x D)
+        gen: 當前代數
+        gene_bounds: 基因邊界字典
+        W_area_penalty: 面積懲罰因子
+        n_workers: worker 數量
+        pm: ProjectManager
+        optimizer: HPA_Optimizer 實例（用於單執行緒模式）
+
+    Returns:
+        fitness: 適應度陣列
+    """
+    keys = list(gene_bounds.keys())
+    fitness = []
+
+    if n_workers > 1 and optimizer is None:
+        # 平行模式：使用 subprocess 呼叫獨立 worker
+        tasks = []
+        for i, gene_array in enumerate(population):
+            gene_dict = {k: gene_array[j] for j, k in enumerate(keys)}
+            name = f"gen{gen:03d}_ind{i:03d}"
+            tasks.append((gene_dict, name, W_area_penalty))
+
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=n_workers) as executor:
+            futures = [executor.submit(call_worker, *task) for task in tasks]
+            for future in futures:
+                score, log_msg = future.result()
+                fitness.append(score)
+                if log_msg:
+                    pm.log(log_msg)
+    else:
+        # 單執行緒模式：使用 HPA_Optimizer（穩定版）
+        for i, gene_array in enumerate(population):
+            f = optimizer.evaluate_individual(gene_array, gen, i)
+            fitness.append(f)
+
+    return np.array(fitness)
+
+
 def run_optimization(args):
     """運行 GA 優化"""
 
@@ -215,17 +203,17 @@ def run_optimization(args):
     convergence_tol = args.tol or 10  # 預設10代不改善就停止
 
     # 平行運算設定（預設保留2核給系統）
-    max_workers = max(1, cpu_count() - 2)  # 至少1個，最多 CPU-2
-    n_workers = args.workers if args.workers else 1  # 預設單執行緒
+    max_workers = max(1, os.cpu_count() - 2)
+    n_workers = args.workers if args.workers else 1
     if n_workers > max_workers:
         n_workers = max_workers
         print(f"⚠️ Workers 調整為 {n_workers}（保留2核給系統）")
 
-    # 讀取面積懲罰因子（提前讀取以便顯示）
+    # 讀取面積懲罰因子
     W_area_penalty = config.get('fitness', {}).get('W_area_penalty', 0.1)
 
     print(f"\n{'='*60}")
-    print(f"HPA 整流罩 GA 優化")
+    print(f"HPA 整流罩 GA 優化（外包工頭模式）")
     print(f"{'='*60}")
     print(f"代數上限: {n_gen}")
     print(f"族群大小: {pop_size}")
@@ -233,7 +221,7 @@ def run_optimization(args):
     print(f"收斂容忍度: {convergence_tol} 代不改善則停止")
     print(f"面積懲罰因子: {W_area_penalty} N/m²")
     print(f"適應度公式: Score = Drag + {W_area_penalty} × Swet")
-    print(f"平行運算: {n_workers} 進程" + (f"（可用: {max_workers}）" if n_workers > 1 else "（單執行緒）"))
+    print(f"平行運算: {n_workers} 進程" + (f"（可用上限: {max_workers}）" if n_workers > 1 else ""))
     print(f"{'='*60}\n")
 
     # 檢查 pymoo
@@ -252,7 +240,7 @@ def run_optimization(args):
 
     # 創建專案管理器
     pm = ProjectManager(base_output_dir="output")
-    pm.log(f"開始 GA 優化: 最多 {n_gen} 代, 族群大小 {pop_size}")
+    pm.log(f"開始 GA 優化: 最多 {n_gen} 代, 族群大小 {pop_size}, {n_workers} 進程")
 
     # 保存配置
     with open(pm.log_dir / 'config_used.json', 'w', encoding='utf-8') as f:
@@ -262,8 +250,14 @@ def run_optimization(args):
             'cli_args': vars(args)
         }, f, indent=2, ensure_ascii=False)
 
-    # 創建優化器（W_area_penalty 已在前面讀取）
-    optimizer = HPA_Optimizer(pm, W_area_penalty=W_area_penalty)
+    # 創建優化器（單執行緒模式使用）
+    optimizer = HPA_Optimizer(pm, W_area_penalty=W_area_penalty) if n_workers == 1 else None
+
+    # 使用優化器的基因範圍
+    GENE_BOUNDS = HPA_Optimizer.GENE_BOUNDS
+    keys = list(GENE_BOUNDS.keys())
+    lower = np.array([GENE_BOUNDS[k][0] for k in keys])
+    upper = np.array([GENE_BOUNDS[k][1] for k in keys])
 
     # 收斂歷史和追蹤
     convergence_history = []
@@ -274,7 +268,6 @@ def run_optimization(args):
     # 定義問題
     class HPAProblem(Problem):
         def __init__(self):
-            lower, upper = optimizer.get_bounds()
             super().__init__(
                 n_var=len(lower),
                 n_obj=1,
@@ -287,31 +280,13 @@ def run_optimization(args):
             nonlocal best_so_far, generations_without_improvement, should_terminate
 
             gen = callback.n_gen
-            gene_bounds = optimizer.GENE_BOUNDS
 
-            if n_workers > 1:
-                # 平行評估（每代的族群評估階段）
-                args_list = [
-                    (x, gen, i, str(pm.vsp_dir), W_area_penalty, gene_bounds)
-                    for i, x in enumerate(X)
-                ]
+            # 評估族群（單執行緒或平行模式）
+            fitness = evaluate_population_parallel(
+                X, gen, GENE_BOUNDS, W_area_penalty, n_workers, pm, optimizer
+            )
 
-                with Pool(processes=n_workers) as pool:
-                    results = pool.map(evaluate_worker, args_list)
-
-                fitness = []
-                for score, msg in results:
-                    fitness.append(score)
-                    if msg:
-                        pm.log(msg)
-            else:
-                # 串行評估（原本方式）
-                fitness = []
-                for i, x in enumerate(X):
-                    f = optimizer.evaluate_individual(x, gen, i)
-                    fitness.append(f)
-
-            out["F"] = np.array(fitness).reshape(-1, 1)
+            out["F"] = fitness.reshape(-1, 1)
 
     # 定義回調函數（用於收斂檢測）
     class ConvergenceCallback(Callback):
@@ -402,7 +377,7 @@ def run_optimization(args):
     elapsed = (end_time - start_time).total_seconds()
 
     # 保存結果
-    best_gene = optimizer.array_to_gene(res.X)
+    best_gene = {k: res.X[i] for i, k in enumerate(keys)}
     best_fitness = float(res.F[0])
 
     pm.save_best_gene(best_gene, best_fitness, callback.n_gen)
@@ -417,9 +392,19 @@ def run_optimization(args):
 
     # 生成最佳模型
     pm.log("生成最佳模型...")
-    curves = CST_Modeler.generate_asymmetric_fairing(best_gene)
     best_vsp_path = str(pm.vsp_dir / 'best_design.vsp3')
-    VSPModelGenerator.create_fuselage(curves, 'best_design', best_vsp_path)
+
+    if optimizer:
+        # 單執行緒模式：直接使用優化器
+        from optimization.hpa_asymmetric_optimizer import VSPModelGenerator
+        curves = CST_Modeler.generate_asymmetric_fairing(best_gene)
+        VSPModelGenerator.create_fuselage(curves, 'best_design', best_vsp_path)
+        pm.log(f"最佳模型已生成: {best_vsp_path}")
+    else:
+        # 平行模式：呼叫 worker
+        score, log_msg = call_worker(best_gene, 'best_design', W_area_penalty)
+        if log_msg:
+            pm.log(log_msg)
 
     # 輸出結果
     pm.log(f"\n{'='*60}")
@@ -434,7 +419,7 @@ def run_optimization(args):
         pm.log(f"  {key}: {value:.4f}")
     pm.log(f"")
     pm.log(f"輸出目錄: {pm.run_dir}")
-    pm.log(f"最佳模型: {best_vsp_path}")
+    pm.log(f"最佳基因: {pm.log_dir / 'best_gene.json'}")
     pm.log(f"收斂曲線: {pm.log_dir / 'convergence.png'}")
     pm.log(f"{'='*60}")
 
@@ -442,12 +427,12 @@ def run_optimization(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='HPA 整流罩 GA 優化')
+    parser = argparse.ArgumentParser(description='HPA 整流罩 GA 優化（外包工頭模式）')
     parser.add_argument('--gen', type=int, help='GA 代數上限')
     parser.add_argument('--pop', type=int, help='族群大小')
     parser.add_argument('--seed', type=int, help='隨機種子')
     parser.add_argument('--tol', type=int, help='收斂容忍度（連續N代不改善則停止）')
-    parser.add_argument('--workers', type=int, help=f'平行運算進程數（預設1，最多{cpu_count()-2}）')
+    parser.add_argument('--workers', type=int, help='平行運算進程數（預設1，建議8-18）')
     parser.add_argument('--config', type=str, help='GA 配置檔案路徑')
     parser.add_argument('--fluid', type=str, help='流體條件配置檔案路徑')
 
