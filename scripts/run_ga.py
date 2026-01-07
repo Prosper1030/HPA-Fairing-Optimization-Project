@@ -5,6 +5,7 @@ HPA 整流罩 GA 優化運行腳本
     python scripts/run_ga.py --gen 50 --pop 20
     python scripts/run_ga.py --config config/ga_config.json
     python scripts/run_ga.py --gen 100 --pop 30 --tol 5  # 5代不改善就停止
+    python scripts/run_ga.py --gen 50 --pop 20 --workers 4  # 4進程平行運算
 """
 
 import sys
@@ -14,6 +15,7 @@ import argparse
 import numpy as np
 from datetime import datetime
 from pathlib import Path
+from multiprocessing import Pool, cpu_count
 
 # 添加專案路徑
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -23,6 +25,106 @@ from optimization.hpa_asymmetric_optimizer import (
     HPA_Optimizer, ProjectManager, CST_Modeler,
     VSPModelGenerator, ConstraintChecker
 )
+
+
+# ==========================================
+# 平行運算 Worker 函數（必須在模組層級）
+# ==========================================
+def evaluate_worker(args_tuple):
+    """
+    平行運算的 worker 函數
+    每個 worker 進程會有自己的 OpenVSP 實例
+    """
+    gene_array, gen, ind, vsp_dir, W_area_penalty, gene_bounds = args_tuple
+
+    try:
+        # 每個進程獨立導入 openvsp
+        import openvsp as vsp
+
+        # 轉換基因陣列為字典
+        keys = list(gene_bounds.keys())
+        gene = {k: gene_array[i] for i, k in enumerate(keys)}
+
+        # 1. 生成幾何曲線
+        curves = CST_Modeler.generate_asymmetric_fairing(gene)
+
+        # 2. 檢查限制（快速篩選）
+        passed, results = ConstraintChecker.check_all_constraints(gene, curves)
+        if not passed:
+            return 1e6, None
+
+        # 3. 生成 VSP 模型
+        name = f"gen{gen:03d}_ind{ind:03d}"
+        vsp_path = os.path.join(vsp_dir, f"{name}.vsp3")
+
+        try:
+            VSPModelGenerator.create_fuselage(curves, name, vsp_path)
+        except Exception as e:
+            return 1e6, f"VSP生成失敗: {e}"
+
+        # 4. 計算阻力
+        try:
+            vsp.ClearVSPModel()
+            vsp.ReadVSPFile(vsp_path)
+
+            vsp.SetAnalysisInputDefaults("ParasiteDrag")
+            vsp.SetDoubleAnalysisInput("ParasiteDrag", "Rho", [1.225])
+            vsp.SetDoubleAnalysisInput("ParasiteDrag", "Vinf", [6.5])
+            vsp.SetDoubleAnalysisInput("ParasiteDrag", "Mu", [1.7894e-5])
+            vsp.ExecAnalysis("ParasiteDrag")
+
+            # 解析 CSV
+            csv_file = os.path.join(vsp_dir, f"{name}_ParasiteBuildUp.csv")
+
+            if os.path.exists(csv_file):
+                with open(csv_file, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+
+                # 解析 Swet
+                swet = None
+                found_header = False
+                for line in lines:
+                    if 'Component Name' in line and 'S_wet' in line:
+                        found_header = True
+                        continue
+                    if found_header and line.strip():
+                        parts = [p.strip() for p in line.split(',')]
+                        if len(parts) >= 2:
+                            try:
+                                swet = float(parts[1])
+                                break
+                            except:
+                                pass
+
+                # 解析 Totals
+                for line in lines:
+                    if 'Totals:' in line:
+                        parts = [p.strip() for p in line.split(',')]
+                        values = [p for p in parts if p and p != 'Totals:']
+                        if len(values) >= 2:
+                            try:
+                                cd = float(values[1])
+                                q = 0.5 * 1.225 * (6.5 ** 2)
+                                drag = q * 1.0 * cd
+
+                                if swet is not None:
+                                    area_penalty = W_area_penalty * swet
+                                    score = drag + area_penalty
+                                    msg = f"{name}: Cd={cd:.6f}, Swet={swet:.3f}m², Drag={drag:.4f}N, Penalty={area_penalty:.4f}N, Score={score:.4f}N"
+                                    return score, msg
+                                else:
+                                    msg = f"{name}: Cd={cd:.6f}, Drag={drag:.4f}N (無Swet)"
+                                    return drag, msg
+                            except:
+                                pass
+
+            return 1e6, f"{name}: CSV解析失敗"
+
+        except Exception as e:
+            return 1e6, f"{name}: 阻力計算失敗 - {e}"
+
+    except Exception as e:
+        return 1e6, f"Worker錯誤: {e}"
 
 
 def load_config(config_path: str) -> dict:
@@ -98,6 +200,13 @@ def run_optimization(args):
     seed = args.seed or config.get('ga_settings', {}).get('seed', 42)
     convergence_tol = args.tol or 10  # 預設10代不改善就停止
 
+    # 平行運算設定（預設保留2核給系統）
+    max_workers = max(1, cpu_count() - 2)  # 至少1個，最多 CPU-2
+    n_workers = args.workers if args.workers else 1  # 預設單執行緒
+    if n_workers > max_workers:
+        n_workers = max_workers
+        print(f"⚠️ Workers 調整為 {n_workers}（保留2核給系統）")
+
     # 讀取面積懲罰因子（提前讀取以便顯示）
     W_area_penalty = config.get('fitness', {}).get('W_area_penalty', 0.1)
 
@@ -110,6 +219,7 @@ def run_optimization(args):
     print(f"收斂容忍度: {convergence_tol} 代不改善則停止")
     print(f"面積懲罰因子: {W_area_penalty} N/m²")
     print(f"適應度公式: Score = Drag + {W_area_penalty} × Swet")
+    print(f"平行運算: {n_workers} 進程" + (f"（可用: {max_workers}）" if n_workers > 1 else "（單執行緒）"))
     print(f"{'='*60}\n")
 
     # 檢查 pymoo
@@ -162,10 +272,30 @@ def run_optimization(args):
         def _evaluate(self, X, out, *args, **kwargs):
             nonlocal best_so_far, generations_without_improvement, should_terminate
 
-            fitness = []
-            for i, x in enumerate(X):
-                f = optimizer.evaluate_individual(x, callback.n_gen, i)
-                fitness.append(f)
+            gen = callback.n_gen
+            gene_bounds = optimizer.GENE_BOUNDS
+
+            if n_workers > 1:
+                # 平行評估（每代的族群評估階段）
+                args_list = [
+                    (x, gen, i, str(pm.vsp_dir), W_area_penalty, gene_bounds)
+                    for i, x in enumerate(X)
+                ]
+
+                with Pool(processes=n_workers) as pool:
+                    results = pool.map(evaluate_worker, args_list)
+
+                fitness = []
+                for score, msg in results:
+                    fitness.append(score)
+                    if msg:
+                        pm.log(msg)
+            else:
+                # 串行評估（原本方式）
+                fitness = []
+                for i, x in enumerate(X):
+                    f = optimizer.evaluate_individual(x, gen, i)
+                    fitness.append(f)
 
             out["F"] = np.array(fitness).reshape(-1, 1)
 
@@ -303,6 +433,7 @@ def main():
     parser.add_argument('--pop', type=int, help='族群大小')
     parser.add_argument('--seed', type=int, help='隨機種子')
     parser.add_argument('--tol', type=int, help='收斂容忍度（連續N代不改善則停止）')
+    parser.add_argument('--workers', type=int, help=f'平行運算進程數（預設1，最多{cpu_count()-2}）')
     parser.add_argument('--config', type=str, help='GA 配置檔案路徑')
     parser.add_argument('--fluid', type=str, help='流體條件配置檔案路徑')
 

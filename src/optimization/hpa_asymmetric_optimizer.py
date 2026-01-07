@@ -794,19 +794,25 @@ class HPA_Optimizer:
                     lines = f.readlines()
 
                 # 先解析 Swet（從元件行）
+                # CSV 格式：
+                # "Component Name,S_wet (m^2),L_ref (m),..."  <- 標題行
+                # "gen000_ind000,6.924290, 2.734252,..."      <- 資料行
                 swet = None
+                found_header = False
                 for line in lines:
-                    # 元件行格式: Component Name,S_wet (m^2),L_ref,...
-                    # 跳過標題行和空行
-                    if 'S_wet' in line and 'm^2' in line:
-                        continue  # 這是標題行
-                    parts = [p.strip() for p in line.split(',')]
-                    if len(parts) >= 2 and parts[0] and not parts[0].startswith(' '):
-                        try:
-                            swet = float(parts[1])
-                            break
-                        except:
-                            pass
+                    # 找到標題行
+                    if 'Component Name' in line and 'S_wet' in line:
+                        found_header = True
+                        continue
+                    # 標題行後的第一個非空行就是元件資料
+                    if found_header and line.strip():
+                        parts = [p.strip() for p in line.split(',')]
+                        if len(parts) >= 2:
+                            try:
+                                swet = float(parts[1])
+                                break
+                            except:
+                                pass
 
                 # 解析 Totals 行
                 for line in lines:
