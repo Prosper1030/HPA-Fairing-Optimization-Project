@@ -1,0 +1,70 @@
+{
+    "name": "HPA Standard Conditions",
+    "description": "人力飛機整流罩優化標準流體條件",
+    "version": "1.0",
+
+    "flow_conditions": {
+        "velocity": {
+            "value": 6.5,
+            "unit": "m/s",
+            "description": "巡航速度"
+        },
+        "density": {
+            "value": 1.225,
+            "unit": "kg/m^3",
+            "description": "空氣密度（海平面標準）"
+        },
+        "viscosity": {
+            "value": 1.7894e-5,
+            "unit": "kg/(m*s)",
+            "description": "動力黏度"
+        },
+        "temperature": {
+            "value": 15.0,
+            "unit": "C",
+            "description": "環境溫度"
+        },
+        "altitude": {
+            "value": 0.0,
+            "unit": "m",
+            "description": "飛行高度"
+        }
+    },
+
+    "reference_values": {
+        "Sref": {
+            "value": 1.0,
+            "unit": "m^2",
+            "description": "參考面積"
+        }
+    },
+
+    "friction_models": {
+        "laminar": {
+            "equation": "Blasius",
+            "code": 0
+        },
+        "turbulent": {
+            "equation": "Power Law Prandtl Low Re",
+            "code": 7
+        }
+    },
+
+    "presets": {
+        "standard": {
+            "velocity": 6.5,
+            "density": 1.225,
+            "viscosity": 1.7894e-5
+        },
+        "high_speed": {
+            "velocity": 8.0,
+            "density": 1.225,
+            "viscosity": 1.7894e-5
+        },
+        "low_speed": {
+            "velocity": 5.0,
+            "density": 1.225,
+            "viscosity": 1.7894e-5
+        }
+    }
+}

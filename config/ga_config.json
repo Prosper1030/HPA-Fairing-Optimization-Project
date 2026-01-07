@@ -1,0 +1,95 @@
+{
+    "name": "HPA Fairing GA Optimization Config",
+    "version": "1.0",
+
+    "ga_settings": {
+        "population_size": 20,
+        "n_generations": 50,
+        "crossover_probability": 0.9,
+        "crossover_eta": 15,
+        "mutation_eta": 20,
+        "seed": 42,
+        "eliminate_duplicates": true
+    },
+
+    "gene_bounds": {
+        "geometry": {
+            "L": {"min": 1.8, "max": 3.0, "unit": "m", "description": "整流罩總長"},
+            "W_max": {"min": 0.48, "max": 0.65, "unit": "m", "description": "最大全寬"},
+            "H_top_max": {"min": 0.85, "max": 1.15, "unit": "m", "description": "上半部高度"},
+            "H_bot_max": {"min": 0.25, "max": 0.50, "unit": "m", "description": "下半部高度"}
+        },
+        "cst_shape": {
+            "N1": {"min": 0.4, "max": 0.9, "description": "Class function N1（共用）"},
+            "N2_top": {"min": 0.5, "max": 1.0, "description": "Shape function N2（上）"},
+            "N2_bot": {"min": 0.5, "max": 1.0, "description": "Shape function N2（下）"}
+        },
+        "position": {
+            "X_max_pos": {"min": 0.2, "max": 0.5, "description": "最大寬度/高度位置"},
+            "X_offset": {"min": 0.5, "max": 1.0, "unit": "m", "description": "收縮開始位置"}
+        },
+        "super_ellipse": {
+            "M_top": {"min": 2.0, "max": 4.0, "description": "上半部超橢圓指數M"},
+            "N_top": {"min": 2.0, "max": 4.0, "description": "上半部超橢圓指數N"},
+            "M_bot": {"min": 2.0, "max": 4.0, "description": "下半部超橢圓指數M"},
+            "N_bot": {"min": 2.0, "max": 4.0, "description": "下半部超橢圓指數N"}
+        },
+        "tail": {
+            "tail_rise": {"min": 0.05, "max": 0.20, "unit": "m", "description": "機尾上升高度"},
+            "blend_start": {"min": 0.65, "max": 0.85, "description": "混合開始位置"},
+            "blend_power": {"min": 1.5, "max": 3.0, "description": "混合曲線冪次"}
+        },
+        "cst_weights": {
+            "w0": {"min": 0.15, "max": 0.35, "description": "前段斜率"},
+            "w1": {"min": 0.25, "max": 0.45, "description": "最大值附近"},
+            "w2": {"min": 0.20, "max": 0.40, "description": "後段平滑"},
+            "w3": {"min": 0.05, "max": 0.20, "description": "尾部收斂"}
+        }
+    },
+
+    "default_gene": {
+        "L": 2.5,
+        "W_max": 0.60,
+        "H_top_max": 0.95,
+        "H_bot_max": 0.35,
+        "N1": 0.5,
+        "N2_top": 0.7,
+        "N2_bot": 0.8,
+        "X_max_pos": 0.25,
+        "X_offset": 0.7,
+        "M_top": 2.5,
+        "N_top": 2.5,
+        "M_bot": 2.5,
+        "N_bot": 2.5,
+        "tail_rise": 0.10,
+        "blend_start": 0.75,
+        "blend_power": 2.0,
+        "w0": 0.25,
+        "w1": 0.35,
+        "w2": 0.30,
+        "w3": 0.10
+    },
+
+    "constraints": {
+        "frame_clearance": {"value": 0.3, "unit": "m", "description": "車架包覆距離"},
+        "pedal_width": {"value": 0.45, "unit": "m", "description": "踏板寬度"},
+        "shoulder_width": {"value": 0.52, "unit": "m", "description": "肩膀寬度"},
+        "shoulder_height_top": {"value": 0.75, "unit": "m", "description": "肩膀上高"},
+        "shoulder_height_bot": {"value": 0.25, "unit": "m", "description": "肩膀下高"},
+        "tail_length": {"value": 1.5, "unit": "m", "description": "機尾長度"}
+    },
+
+    "fitness": {
+        "objective": "minimize",
+        "target": "drag",
+        "penalty_coefficient": 1000000,
+        "description": "最小化阻力（N），約束違反時返回懲罰值"
+    },
+
+    "output": {
+        "save_all_models": false,
+        "save_best_models": true,
+        "save_generation_stats": true,
+        "plot_convergence": true
+    }
+}
