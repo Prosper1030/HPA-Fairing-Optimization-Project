@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual Environment
+vsp_env/
+env/
+venv/
+
+# OpenVSP outputs
+output/
+*.vsp3
+*_CompGeom.csv
+*_CompGeom.txt
+*_ParasiteBuildUp.csv
+*.vspaero
+*.history
+
+# Temporary files
+*.tmp
+*.log
+nul
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

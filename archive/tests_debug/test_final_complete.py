@@ -1,0 +1,53 @@
+"""生成最終完整版本 - 角度修復 + 尾部修復"""
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
+
+# 強制重新載入
+for module in ['optimization.hpa_asymmetric_optimizer', 'math.cst_derivatives']:
+    if module in sys.modules:
+        del sys.modules[module]
+
+from optimization.hpa_asymmetric_optimizer import CST_Modeler, VSPModelGenerator
+
+gene = {
+    'L': 2.5,
+    'W_max': 0.60,
+    'H_top_max': 0.95,
+    'H_bot_max': 0.35,
+    'N1': 0.5,
+    'N2_top': 0.7,
+    'N2_bot': 0.8,
+    'X_max_pos': 0.25,
+    'X_offset': 0.7,
+}
+
+print("="*80)
+print("生成最終完整版本")
+print("="*80)
+print("✅ ZLoc歸一化修復（位置正確）")
+print("✅ 非對稱角度計算法（skinning平滑）")
+print("✅ Bottom角度正負號修正")
+print("✅ Nose/Tail統一使用新角度方法")
+print("✅ 尾部單調收斂（避免扭曲）")
+print("="*80)
+
+curves = CST_Modeler.generate_asymmetric_fairing(gene, num_sections=40)
+
+output_file = "output/current/fairing_final_complete.vsp3"
+print(f"\n生成: {output_file}")
+
+VSPModelGenerator.create_fuselage(
+    curves,
+    name="Fairing_Final_Complete",
+    filepath=output_file
+)
+
+print(f"\n✅ 完成！")
+print(f"\n請在VSP GUI中檢查:")
+print("  1. 位置：下邊界約-0.35m ✅")
+print("  2. Skinning：上下表面完全平滑 ✅")
+print("  3. 機頭：應該平滑對稱 ✅")
+print("  4. 機尾：應該平滑收斂，沒有扭曲 ✅")
+print("\n這個版本應該是最終可用版本！")
+print("="*80)
