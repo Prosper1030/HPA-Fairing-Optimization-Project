@@ -736,10 +736,13 @@ class HPA_Optimizer:
         'w3': (0.05, 0.20),           # 尾部收斂
     }
 
-    def __init__(self, project_manager: ProjectManager):
+    def __init__(self, project_manager: ProjectManager, W_area_penalty: float = 0.1):
         self.pm = project_manager
         # DragAnalyzer 不需要指定輸出目錄，CSV 會在 VSP 檔案所在目錄生成
         self.drag_analyzer = None
+        # 面積懲罰因子 (N/m²)：Score = Drag + W_area_penalty × S_wet
+        self.W_area_penalty = W_area_penalty
+        self.pm.log(f"面積懲罰因子 W_area_penalty = {W_area_penalty} N/m²")
 
     def evaluate_individual(self, gene_array: np.ndarray, gen: int, ind: int) -> float:
         """
@@ -790,6 +793,21 @@ class HPA_Optimizer:
                 with open(csv_file, 'r', encoding='utf-8') as f:
                     lines = f.readlines()
 
+                # 先解析 Swet（從元件行）
+                swet = None
+                for line in lines:
+                    # 元件行格式: Component Name,S_wet (m^2),L_ref,...
+                    # 跳過標題行和空行
+                    if 'S_wet' in line and 'm^2' in line:
+                        continue  # 這是標題行
+                    parts = [p.strip() for p in line.split(',')]
+                    if len(parts) >= 2 and parts[0] and not parts[0].startswith(' '):
+                        try:
+                            swet = float(parts[1])
+                            break
+                        except:
+                            pass
+
                 # 解析 Totals 行
                 for line in lines:
                     if 'Totals:' in line:
@@ -807,13 +825,22 @@ class HPA_Optimizer:
                                 cd = float(values[1])
 
                                 # 阻力計算：Drag = q * Sref * Cd = q * f
-                                # ⚠️ 修正：使用 f (drag area) 而非 Swet * Cd
                                 q = 0.5 * 1.225 * (6.5 ** 2)  # 動壓 (Pa)
                                 Sref = 1.0  # 參考面積 (m²)
                                 drag = q * Sref * cd  # 或等效於 q * f_value
 
-                                self.pm.log(f"{name}: Cd={cd:.6f}, f={f_value:.6f}m², Drag={drag:.4f}N")
-                                return drag
+                                # 適應度計算：Score = Drag + W_area_penalty × S_wet
+                                # 防止 GA 為降低阻力而做出過大整流罩
+                                if swet is not None:
+                                    area_penalty = self.W_area_penalty * swet
+                                    score = drag + area_penalty
+                                    self.pm.log(f"{name}: Cd={cd:.6f}, Swet={swet:.3f}m², "
+                                               f"Drag={drag:.4f}N, Penalty={area_penalty:.4f}N, "
+                                               f"Score={score:.4f}N")
+                                    return score
+                                else:
+                                    self.pm.log(f"{name}: Cd={cd:.6f}, Drag={drag:.4f}N (無Swet)")
+                                    return drag
                             except Exception as parse_err:
                                 self.pm.log(f"CSV 解析錯誤: {parse_err}, line={line}")
                                 pass

@@ -83,7 +83,9 @@
         "objective": "minimize",
         "target": "drag",
         "penalty_coefficient": 1000000,
-        "description": "最小化阻力（N），約束違反時返回懲罰值"
+        "W_area_penalty": 0.1,
+        "W_area_penalty_description": "面積懲罰因子 (N/m²)：每增加1m²濕面積等效增加此值的阻力代價",
+        "description": "Score = Drag + W_area_penalty × S_wet，防止GA為降低阻力而做出過大整流罩"
     },
 
     "output": {

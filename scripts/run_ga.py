@@ -98,6 +98,9 @@ def run_optimization(args):
     seed = args.seed or config.get('ga_settings', {}).get('seed', 42)
     convergence_tol = args.tol or 10  # 預設10代不改善就停止
 
+    # 讀取面積懲罰因子（提前讀取以便顯示）
+    W_area_penalty = config.get('fitness', {}).get('W_area_penalty', 0.1)
+
     print(f"\n{'='*60}")
     print(f"HPA 整流罩 GA 優化")
     print(f"{'='*60}")
@@ -105,6 +108,8 @@ def run_optimization(args):
     print(f"族群大小: {pop_size}")
     print(f"隨機種子: {seed}")
     print(f"收斂容忍度: {convergence_tol} 代不改善則停止")
+    print(f"面積懲罰因子: {W_area_penalty} N/m²")
+    print(f"適應度公式: Score = Drag + {W_area_penalty} × Swet")
     print(f"{'='*60}\n")
 
     # 檢查 pymoo
@@ -133,8 +138,8 @@ def run_optimization(args):
             'cli_args': vars(args)
         }, f, indent=2, ensure_ascii=False)
 
-    # 創建優化器
-    optimizer = HPA_Optimizer(pm)
+    # 創建優化器（W_area_penalty 已在前面讀取）
+    optimizer = HPA_Optimizer(pm, W_area_penalty=W_area_penalty)
 
     # 收斂歷史和追蹤
     convergence_history = []
