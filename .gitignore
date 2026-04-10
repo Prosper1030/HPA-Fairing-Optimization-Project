@@ -24,12 +24,16 @@ output/
 *.log
 nul
 
+# Third-party docs
+OpenVSP-API-latest/
+
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 .claude/
+CLAUDE.md
 
 # OS
 .DS_Store

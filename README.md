@@ -1,5 +1,7 @@
 # HPA Fairing Optimization Project
 
+Project Name: HPA Fairing Optimization Project
+
 **人力飛機整流罩 GA 優化系統**
 
 成大航太 × 日本鳥人間大賽專用
@@ -11,6 +13,7 @@
 本專案使用 **CST (Class Shape Transformation)** 參數化方法與 **OpenVSP** 空氣動力分析工具，配合 **遺傳演算法 (GA)** 自動優化人力飛機整流罩設計。
 
 ### 核心特色
+
 - **20 個基因參數**：完整控制整流罩幾何
 - **上下非對稱截面**：M/N 指數可分開設定
 - **CST 曲線**：峰值歸一化確保精確尺寸
@@ -30,6 +33,7 @@
 # 自訂參數
 ./vsp_env/Scripts/python.exe scripts/run_ga.py --gen 100 --pop 30
 
+
 # 使用配置檔案
 ./vsp_env/Scripts/python.exe scripts/run_ga.py --config config/ga_config.json
 ```
@@ -43,6 +47,7 @@
 ### 3. 查看結果
 
 輸出位於 `output/hpa_run_YYYYMMDD_HHMMSS/`：
+
 - `vsp_models/best_design.vsp3` - 最佳模型（用 VSP GUI 開啟）
 - `logs/convergence.png` - 收斂曲線
 - `logs/best_gene.json` - 最佳基因參數
@@ -51,28 +56,28 @@
 
 ## 基因參數定義（20 個）
 
-| 類別 | 參數 | 範圍 | 說明 |
-|------|------|------|------|
-| **幾何** | L | 1.8-3.0 m | 整流罩總長 |
-| | W_max | 0.48-0.65 m | 最大全寬 |
-| | H_top_max | 0.85-1.15 m | 上半部高度 |
-| | H_bot_max | 0.25-0.50 m | 下半部高度 |
-| **CST形狀** | N1 | 0.4-0.9 | Class function（共用）|
-| | N2_top | 0.5-1.0 | 上曲線 Shape function |
-| | N2_bot | 0.5-1.0 | 下曲線 Shape function |
-| **位置** | X_max_pos | 0.2-0.5 | 最大寬度位置 |
-| | X_offset | 0.5-1.0 m | 收縮開始位置 |
-| **超橢圓** | M_top | 2.0-4.0 | 上半部 M 指數 |
-| | N_top | 2.0-4.0 | 上半部 N 指數 |
-| | M_bot | 2.0-4.0 | 下半部 M 指數 |
-| | N_bot | 2.0-4.0 | 下半部 N 指數 |
-| **尾部** | tail_rise | 0.05-0.20 m | 機尾上升高度 |
-| | blend_start | 0.65-0.85 | 混合開始位置 |
-| | blend_power | 1.5-3.0 | 混合曲線冪次 |
-| **CST權重** | w0 | 0.15-0.35 | 前段斜率 |
-| | w1 | 0.25-0.45 | 最大值附近 |
-| | w2 | 0.20-0.40 | 後段平滑 |
-| | w3 | 0.05-0.20 | 尾部收斂 |
+| 類別         | 參數        | 範圍        | 說明                   |
+| ------------ | ----------- | ----------- | ---------------------- |
+| **幾何**     | L           | 1.8-3.0 m   | 整流罩總長             |
+|              | W_max       | 0.48-0.65 m | 最大全寬               |
+|              | H_top_max   | 0.85-1.15 m | 上半部高度             |
+|              | H_bot_max   | 0.25-0.50 m | 下半部高度             |
+| **CST 形狀** | N1          | 0.4-0.9     | Class function（共用） |
+|              | N2_top      | 0.5-1.0     | 上曲線 Shape function  |
+|              | N2_bot      | 0.5-1.0     | 下曲線 Shape function  |
+| **位置**     | X_max_pos   | 0.2-0.5     | 最大寬度位置           |
+|              | X_offset    | 0.5-1.0 m   | 收縮開始位置           |
+| **超橢圓**   | M_top       | 2.0-4.0     | 上半部 M 指數          |
+|              | N_top       | 2.0-4.0     | 上半部 N 指數          |
+|              | M_bot       | 2.0-4.0     | 下半部 M 指數          |
+|              | N_bot       | 2.0-4.0     | 下半部 N 指數          |
+| **尾部**     | tail_rise   | 0.05-0.20 m | 機尾上升高度           |
+|              | blend_start | 0.65-0.85   | 混合開始位置           |
+|              | blend_power | 1.5-3.0     | 混合曲線冪次           |
+| **CST 權重** | w0          | 0.15-0.35   | 前段斜率               |
+|              | w1          | 0.25-0.45   | 最大值附近             |
+|              | w2          | 0.20-0.40   | 後段平滑               |
+|              | w3          | 0.05-0.20   | 尾部收斂               |
 
 ---
 
@@ -104,11 +109,11 @@ Fairing Design/
 
 ```json
 {
-    "flow_conditions": {
-        "velocity": {"value": 6.5, "unit": "m/s"},
-        "density": {"value": 1.225, "unit": "kg/m^3"},
-        "viscosity": {"value": 1.7894e-5, "unit": "kg/(m*s)"}
-    }
+  "flow_conditions": {
+    "velocity": { "value": 6.5, "unit": "m/s" },
+    "density": { "value": 1.225, "unit": "kg/m^3" },
+    "viscosity": { "value": 1.7894e-5, "unit": "kg/(m*s)" }
+  }
 }
 ```
 
@@ -116,12 +121,12 @@ Fairing Design/
 
 ```json
 {
-    "ga_settings": {
-        "population_size": 20,
-        "n_generations": 50,
-        "crossover_probability": 0.9,
-        "seed": 42
-    }
+  "ga_settings": {
+    "population_size": 20,
+    "n_generations": 50,
+    "crossover_probability": 0.9,
+    "seed": 42
+  }
 }
 ```
 
@@ -129,14 +134,14 @@ Fairing Design/
 
 ## 硬約束條件
 
-| 約束 | 值 | 說明 |
-|------|-----|------|
-| 車架包覆 | 0.3 m | X_offset >= 0.3 |
-| 踏板寬度 | 0.45 m | 踏板處全寬 >= 0.45 |
-| 肩膀寬度 | 0.52 m | 肩膀處全寬 >= 0.52 |
-| 肩膀上高 | 0.75 m | 肩膀處上高 >= 0.75 |
-| 肩膀下高 | 0.25 m | 肩膀處下高 >= 0.25 |
-| 機尾長度 | 1.5 m | L - X_offset >= 1.5 |
+| 約束     | 值     | 說明                |
+| -------- | ------ | ------------------- |
+| 車架包覆 | 0.3 m  | X_offset >= 0.3     |
+| 踏板寬度 | 0.45 m | 踏板處全寬 >= 0.45  |
+| 肩膀寬度 | 0.52 m | 肩膀處全寬 >= 0.52  |
+| 肩膀上高 | 0.75 m | 肩膀處上高 >= 0.75  |
+| 肩膀下高 | 0.25 m | 肩膀處下高 >= 0.25  |
+| 機尾長度 | 1.5 m  | L - X_offset >= 1.5 |
 
 ---
 
