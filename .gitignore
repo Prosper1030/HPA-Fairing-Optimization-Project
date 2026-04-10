@@ -39,3 +39,5 @@ CLAUDE.md
 .DS_Store
 Thumbs.db
 desktop.ini
+
+gh_cli/
