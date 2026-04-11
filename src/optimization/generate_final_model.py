@@ -3,9 +3,9 @@
 確保所有設置正確保存到VSP檔案
 """
 import openvsp as vsp
-import numpy as np
 import os
 import sys
+import importlib.util
 
 # 添加專案路徑
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
@@ -14,6 +14,14 @@ if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
 from optimization.hpa_asymmetric_optimizer import CST_Modeler
+
+math_dir = os.path.join(src_path, 'math')
+spec_deriv = importlib.util.spec_from_file_location(
+    "cst_derivatives", os.path.join(math_dir, "cst_derivatives.py")
+)
+cst_derivatives = importlib.util.module_from_spec(spec_deriv)
+spec_deriv.loader.exec_module(cst_derivatives)
+CSTDerivatives = cst_derivatives.CSTDerivatives
 
 
 def generate_final_model(gene, output_filepath, verbose=True):
@@ -114,8 +122,6 @@ def generate_final_model(gene, output_filepath, verbose=True):
             vsp.SetParmVal(vsp.GetXSecParm(xsec, "Super_N"), 2.5)
 
             # 切線角度（使用新方法）
-            from math.cst_derivatives import CSTDerivatives
-
             asymmetric_angles = CSTDerivatives.compute_asymmetric_tangent_angles(
                 curves['x'], curves['z_upper'], curves['z_lower'], i
             )
