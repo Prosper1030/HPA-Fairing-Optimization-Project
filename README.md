@@ -24,24 +24,39 @@ Project Name: HPA Fairing Optimization Project
 
 ## 快速開始
 
-### 1. 運行 GA 優化
+### 0. 建立環境
+
+macOS / Linux：
+
+```bash
+source activate_env.sh
+```
+
+Windows PowerShell：
 
 ```powershell
+. .\activate_env.ps1
+```
+
+詳細的 macOS 安裝流程請見 `docs/MAC_SETUP.md`。
+
+### 1. 運行 GA 優化
+
+```bash
 # 使用預設配置（50代，20族群）
-./vsp_env/Scripts/python.exe scripts/run_ga.py
+python scripts/run_ga.py
 
 # 自訂參數
-./vsp_env/Scripts/python.exe scripts/run_ga.py --gen 100 --pop 30
-
+python scripts/run_ga.py --gen 100 --pop 30
 
 # 使用配置檔案
-./vsp_env/Scripts/python.exe scripts/run_ga.py --config config/ga_config.json
+python scripts/run_ga.py --config config/ga_config.json
 ```
 
 ### 2. 測試單一設計
 
-```powershell
-./vsp_env/Scripts/python.exe tests/test_expanded_parameters.py
+```bash
+python tests/test_expanded_parameters.py
 ```
 
 ### 3. 查看結果
@@ -97,7 +112,9 @@ Fairing Design/
 │   └── run_ga.py             # GA 運行腳本
 ├── tests/                    # 測試代碼
 ├── output/                   # 輸出結果
-├── docs/                     # 文檔
+├── docs/                     # 文檔（含 macOS 安裝說明）
+├── requirements.txt          # Python 依賴
+├── activate_env.sh           # macOS/Linux 環境啟動腳本
 └── archive/                  # 舊代碼備份
 ```
 
@@ -149,14 +166,20 @@ Fairing Design/
 
 - **Python**: 3.11.0（虛擬環境 `vsp_env/`）
 - **OpenVSP**: 3.42.3
-- **pymoo**: GA 優化庫
-- **matplotlib**: 視覺化（可選）
+- **requirements.txt**: `numpy`, `scipy`, `pymoo`, `matplotlib`
 
-### 安裝 pymoo
+### 安裝依賴
 
-```powershell
-./vsp_env/Scripts/pip.exe install pymoo
+```bash
+python -m pip install -r requirements.txt
 ```
+
+### OpenVSP 說明
+
+- 專案內的 Python 程式都維持 `import openvsp as vsp`
+- `openvsp` 不包含在 `requirements.txt` 內
+- macOS 上請先安裝 OpenVSP.app，再用 `source activate_env.sh` 讓腳本自動補上 `PYTHONPATH`
+- 若 OpenVSP 發行版的 Python wrapper 與你的 Python 版本不相容，需改用相容版本或自行編譯 OpenVSP Python API
 
 ---
 

@@ -14,7 +14,7 @@ Fairing Design/
 │   ├── 📂 analysis/                     # 分析模組
 │   │   └── drag_analysis.py             # ✅ DragAnalyzer 阻力計算（已修復）
 │   │
-│   ├── 📂 geometry/                     # 幾何生成模組（已清空舊版本）
+│   ├── 📂 geometry/                     # 幾何生成模組（相容層/封裝）
 │   │   └── __init__.py
 │   │
 │   ├── 📂 math/                         # 數學計算模組
@@ -50,6 +50,7 @@ Fairing Design/
 ├── 📂 docs/                             # 文檔（已精簡）
 │   ├── OPENVSP_API_GUIDE.md             # OpenVSP API指南
 │   ├── ParasiteDrag_API_Solution.md     # ParasiteDrag修復方案
+│   ├── MAC_SETUP.md                     # macOS 安裝與環境設定
 │   └── OpenVSP Python API 文檔.pdf      # 官方API PDF
 │
 ├── 📂 archive/                          # 總歸檔區
@@ -60,10 +61,12 @@ Fairing Design/
 │
 ├── 📂 vsp_env/                          # Python虛擬環境（勿修改）
 │
+├── requirements.txt                     # Python 依賴
+├── activate_env.sh                      # macOS/Linux 環境啟動腳本
+├── activate_env.ps1                     # Windows PowerShell 環境啟動腳本
 ├── CLAUDE.md                            # ⭐ 主工作文檔（所有修復記錄）
 ├── PROJECT_STRUCTURE.md                 # 本文件
-├── README.md                            # 專案說明
-└── activate_env.ps1                     # 環境啟動腳本
+└── README.md                            # 專案說明
 ```
 
 ---
@@ -151,7 +154,7 @@ print(f"Drag: {result['Drag']} N")
 關鍵函數：
 
 ```python
-from math.cst_derivatives import CSTDerivatives
+from optimization.hpa_asymmetric_optimizer import CSTDerivatives
 
 # 計算非對稱切線角度
 angles = CSTDerivatives.compute_asymmetric_tangent_angles(
@@ -266,21 +269,21 @@ def evaluate_fitness(gene):
 
 ### 1. 測試現有模型的阻力
 
-```cmd
-cd "D:\Fairing Design"
-.\vsp_env\Scripts\python.exe tests\analyze_existing_file.py
+```bash
+source activate_env.sh
+python tests/analyze_existing_file.py
 ```
 
 ### 2. 生成新模型並分析
 
-```cmd
-.\vsp_env\Scripts\python.exe tests\run_final_generator.py
+```bash
+python tests/run_final_generator.py
 ```
 
 ### 3. 繪製側視圖曲線
 
-```cmd
-.\vsp_env\Scripts\python.exe tests\plot_side_view_curves.py
+```bash
+python tests/plot_side_view_curves.py
 ```
 
 ---

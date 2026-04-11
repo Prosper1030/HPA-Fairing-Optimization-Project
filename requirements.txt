@@ -1,0 +1,7 @@
+# Base Python dependencies for this repository.
+# OpenVSP itself is not installed from here; use the OpenVSP distribution and
+# let activate_env.sh expose its Python API to the virtual environment.
+numpy
+scipy
+pymoo
+matplotlib
