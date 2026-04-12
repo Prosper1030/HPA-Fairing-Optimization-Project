@@ -7,7 +7,6 @@ HPA 整流罩非對稱優化器
 """
 
 import numpy as np
-import openvsp as vsp
 from scipy.special import comb
 import os
 import sys
@@ -24,6 +23,7 @@ if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
 from analysis.drag_analysis import DragAnalyzer
+from utils.openvsp_loader import load_openvsp
 
 # 導入數學工具（來自 src/math/）
 import importlib.util
@@ -493,11 +493,13 @@ class VSPModelGenerator:
     """使用已驗證的 VSP API 方法生成模型"""
 
     @staticmethod
-    def create_fuselage(curves: Dict, name: str, filepath: str):
+    def create_fuselage(curves: Dict, name: str, filepath: str | None = None):
         """
         從 CST 曲線創建 VSP Fuselage
         使用 cst_geometry_math_driven.py 中已驗證的方法
         """
+        vsp = load_openvsp()
+
         # 清空模型
         vsp.ClearVSPModel()
 
@@ -505,6 +507,11 @@ class VSPModelGenerator:
         fuse_id = vsp.AddGeom("FUSELAGE")
         vsp.SetGeomName(fuse_id, name)
         vsp.SetParmVal(fuse_id, "Length", "Design", curves['L'])
+        vsp.SetSetFlag(fuse_id, vsp.SET_ALL, True)
+        if hasattr(vsp, "SET_SHOWN"):
+            vsp.SetSetFlag(fuse_id, vsp.SET_SHOWN, True)
+        if hasattr(vsp, "SET_NOT_SHOWN"):
+            vsp.SetSetFlag(fuse_id, vsp.SET_NOT_SHOWN, False)
 
         # 獲取截面表面
         xsec_surf = vsp.GetXSecSurf(fuse_id, 0)
@@ -690,9 +697,10 @@ class VSPModelGenerator:
 
             vsp.Update()
 
-        # 保存檔案
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        vsp.WriteVSPFile(filepath)
+        # 保存檔案（GA 熱路徑可略過，避免額外 I/O）
+        if filepath:
+            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+            vsp.WriteVSPFile(filepath)
 
 
 # ==========================================
@@ -738,8 +746,8 @@ class HPA_Optimizer:
 
     def __init__(self, project_manager: ProjectManager, W_area_penalty: float = 0.1):
         self.pm = project_manager
-        # DragAnalyzer 不需要指定輸出目錄，CSV 會在 VSP 檔案所在目錄生成
-        self.drag_analyzer = None
+        # 統一透過 OpenVSP results API 讀取結果，避免 GA 熱路徑再做 CSV 解析。
+        self.drag_analyzer = DragAnalyzer(output_dir=str(self.pm.vsp_dir))
         # 面積懲罰因子 (N/m²)：Score = Drag + W_area_penalty × S_wet
         self.W_area_penalty = W_area_penalty
         self.pm.log(f"面積懲罰因子 W_area_penalty = {W_area_penalty} N/m²")
@@ -769,90 +777,34 @@ class HPA_Optimizer:
         vsp_path = self.pm.get_vsp_path(name)
 
         try:
-            VSPModelGenerator.create_fuselage(curves, name, vsp_path)
+            VSPModelGenerator.create_fuselage(curves, name, filepath=vsp_path)
         except Exception as e:
             self.pm.log(f"VSP 生成失敗 ({name}): {e}")
             return 1e6
 
-        # 4. 計算阻力（使用已驗證方法）
+        # 4. 計算阻力（保留檔案載入流程以確保與已驗證結果一致）
         try:
-            # 執行阻力分析
-            vsp.ClearVSPModel()
-            vsp.ReadVSPFile(vsp_path)
+            result = self.drag_analyzer.run_analysis(vsp_path, velocity=6.5, rho=1.225, mu=1.7894e-5)
+            if not result:
+                self.pm.log(f"阻力計算失敗 ({name}): 無法取得 ParasiteDrag 結果")
+                return 1e6
 
-            vsp.SetAnalysisInputDefaults("ParasiteDrag")
-            vsp.SetDoubleAnalysisInput("ParasiteDrag", "Rho", [1.225])
-            vsp.SetDoubleAnalysisInput("ParasiteDrag", "Vinf", [6.5])
-            vsp.SetDoubleAnalysisInput("ParasiteDrag", "Mu", [1.7894e-5])
-            vsp.ExecAnalysis("ParasiteDrag")
+            drag = result["Drag"]
+            swet = result.get("Swet")
+            cd = result["Cd"]
 
-            # CSV 檔案在 VSP 檔案所在目錄生成
-            csv_file = os.path.join(self.pm.vsp_dir, f"{name}_ParasiteBuildUp.csv")
+            if swet is not None:
+                area_penalty = self.W_area_penalty * swet
+                score = drag + area_penalty
+                self.pm.log(
+                    f"{name}: Cd={cd:.6f}, Swet={swet:.3f}m², "
+                    f"Drag={drag:.4f}N, Penalty={area_penalty:.4f}N, "
+                    f"Score={score:.4f}N"
+                )
+                return score
 
-            if os.path.exists(csv_file):
-                with open(csv_file, 'r', encoding='utf-8') as f:
-                    lines = f.readlines()
-
-                # 先解析 Swet（從元件行）
-                # CSV 格式：
-                # "Component Name,S_wet (m^2),L_ref (m),..."  <- 標題行
-                # "gen000_ind000,6.924290, 2.734252,..."      <- 資料行
-                swet = None
-                found_header = False
-                for line in lines:
-                    # 找到標題行
-                    if 'Component Name' in line and 'S_wet' in line:
-                        found_header = True
-                        continue
-                    # 標題行後的第一個非空行就是元件資料
-                    if found_header and line.strip():
-                        parts = [p.strip() for p in line.split(',')]
-                        if len(parts) >= 2:
-                            try:
-                                swet = float(parts[1])
-                                break
-                            except:
-                                pass
-
-                # 解析 Totals 行
-                for line in lines:
-                    if 'Totals:' in line:
-                        # 找到 "Totals:" 後的數值
-                        # 格式: ... Totals:, f, Cd, %
-                        parts = [p.strip() for p in line.split(',')]
-                        # 過濾掉空字串
-                        values = [p for p in parts if p and p != 'Totals:']
-
-                        if len(values) >= 2:
-                            try:
-                                # values[0] = f (drag area, m²), values[1] = Cd
-                                # f = Cd * Sref，由於 Sref = 1.0 m²，所以 f = Cd
-                                f_value = float(values[0])
-                                cd = float(values[1])
-
-                                # 阻力計算：Drag = q * Sref * Cd = q * f
-                                q = 0.5 * 1.225 * (6.5 ** 2)  # 動壓 (Pa)
-                                Sref = 1.0  # 參考面積 (m²)
-                                drag = q * Sref * cd  # 或等效於 q * f_value
-
-                                # 適應度計算：Score = Drag + W_area_penalty × S_wet
-                                # 防止 GA 為降低阻力而做出過大整流罩
-                                if swet is not None:
-                                    area_penalty = self.W_area_penalty * swet
-                                    score = drag + area_penalty
-                                    self.pm.log(f"{name}: Cd={cd:.6f}, Swet={swet:.3f}m², "
-                                               f"Drag={drag:.4f}N, Penalty={area_penalty:.4f}N, "
-                                               f"Score={score:.4f}N")
-                                    return score
-                                else:
-                                    self.pm.log(f"{name}: Cd={cd:.6f}, Drag={drag:.4f}N (無Swet)")
-                                    return drag
-                            except Exception as parse_err:
-                                self.pm.log(f"CSV 解析錯誤: {parse_err}, line={line}")
-                                pass
-
-            self.pm.log(f"阻力計算失敗 ({name}): CSV 檔案 {csv_file} 不存在或解析失敗")
-            return 1e6
+            self.pm.log(f"{name}: Cd={cd:.6f}, Drag={drag:.4f}N (無Swet)")
+            return drag
 
         except Exception as e:
             self.pm.log(f"阻力計算失敗 ({name}): {e}")

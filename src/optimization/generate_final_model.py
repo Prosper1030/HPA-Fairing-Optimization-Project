@@ -2,7 +2,6 @@
 最終模型生成器 - 系統化、模組化的方法
 確保所有設置正確保存到VSP檔案
 """
-import openvsp as vsp
 import os
 import sys
 import importlib.util
@@ -14,6 +13,7 @@ if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
 from optimization.hpa_asymmetric_optimizer import CST_Modeler
+from utils.openvsp_loader import load_openvsp
 
 math_dir = os.path.join(src_path, 'math')
 spec_deriv = importlib.util.spec_from_file_location(
@@ -42,6 +42,8 @@ def generate_final_model(gene, output_filepath, verbose=True):
         print("最終模型生成器")
         print("="*80)
         print(f"輸出檔案: {output_filepath}")
+
+    vsp = load_openvsp()
 
     # 1. 生成曲線數據
     if verbose:

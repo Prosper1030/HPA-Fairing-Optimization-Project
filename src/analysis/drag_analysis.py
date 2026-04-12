@@ -1,18 +1,41 @@
 """
-Parasite Drag Analysis Module for OpenVSP
-Handles analysis execution and CSV result parsing
+Parasite drag analysis helpers for OpenVSP.
+
+The validated path on this project is:
+1. write a `.vsp3` model,
+2. reload it into OpenVSP,
+3. execute `ParasiteDrag`,
+4. read the result fields directly from the OpenVSP results API.
+
+This keeps the same aerodynamic outputs as the old file-based workflow while
+removing the extra CSV parsing cost from the GA hot path.
 """
-import openvsp as vsp
-import csv
 import os
-import shutil
+
+from utils.openvsp_loader import load_openvsp
 
 
 class DragAnalyzer:
-    """Execute parasite drag analysis and parse results"""
+    """Execute parasite drag analysis through the OpenVSP results API."""
 
     def __init__(self, output_dir="output"):
         self.output_dir = output_dir
+
+    @staticmethod
+    def _set_double_input_if_available(vsp, analysis_name, input_names, primary_name, fallback_name, value):
+        if primary_name in input_names:
+            vsp.SetDoubleAnalysisInput(analysis_name, primary_name, [float(value)])
+            return
+        if fallback_name and fallback_name in input_names:
+            vsp.SetDoubleAnalysisInput(analysis_name, fallback_name, [float(value)])
+
+    @staticmethod
+    def _set_int_input_if_available(vsp, analysis_name, input_names, primary_name, fallback_name, value):
+        if primary_name in input_names:
+            vsp.SetIntAnalysisInput(analysis_name, primary_name, [int(value)])
+            return
+        if fallback_name and fallback_name in input_names:
+            vsp.SetIntAnalysisInput(analysis_name, fallback_name, [int(value)])
 
     def run_analysis(self, vsp_filepath, velocity, rho, mu):
         """
@@ -36,127 +59,45 @@ class DragAnalyzer:
         """
         name = os.path.basename(vsp_filepath).replace(".vsp3", "")
         print(f"   🌪️  [Analysis] Computing aerodynamics for {name}...")
+        vsp = load_openvsp()
 
         # Load model
         vsp.ClearVSPModel()
         vsp.ReadVSPFile(vsp_filepath)
+        vsp.Update()
 
-        # Setup analysis
         analysis_name = "ParasiteDrag"
+        input_names = set(vsp.GetAnalysisInputNames(analysis_name))
         vsp.SetAnalysisInputDefaults(analysis_name)
-        vsp.SetDoubleAnalysisInput(analysis_name, "Rho", [rho])
-        vsp.SetDoubleAnalysisInput(analysis_name, "Vinf", [velocity])
-        vsp.SetDoubleAnalysisInput(analysis_name, "Mu", [mu])
 
-        # Execute (CSV files generated automatically in working directory)
-        vsp.ExecAnalysis(analysis_name)
+        DragAnalyzer._set_int_input_if_available(vsp, analysis_name, input_names, "GeomSet", "Set", vsp.SET_ALL)
+        DragAnalyzer._set_double_input_if_available(vsp, analysis_name, input_names, "Vinf", None, velocity)
+        DragAnalyzer._set_double_input_if_available(vsp, analysis_name, input_names, "Density", "Rho", rho)
+        DragAnalyzer._set_double_input_if_available(vsp, analysis_name, input_names, "DynaVisc", "Mu", mu)
 
-        # Move generated CSV files to output folder
-        generated_csv = f"{name}_ParasiteBuildUp.csv"
-        target_csv = os.path.join(self.output_dir, generated_csv)
+        if "FileName" in input_names:
+            try:
+                vsp.SetStringAnalysisInput(analysis_name, "FileName", ["/dev/null"])
+            except Exception:
+                pass
 
-        # Check if CSV was generated in current directory
-        if os.path.exists(generated_csv):
-            # Remove existing file if present
-            if os.path.exists(target_csv):
-                os.remove(target_csv)
-            shutil.move(generated_csv, target_csv)
-        else:
-            # Check if CSV was generated in vsp file's directory
-            vsp_dir = os.path.dirname(vsp_filepath)
-            vsp_dir_csv = os.path.join(vsp_dir, generated_csv)
-
-            if os.path.exists(vsp_dir_csv):
-                # Move from vsp directory to output folder
-                if os.path.exists(target_csv):
-                    os.remove(target_csv)
-                shutil.move(vsp_dir_csv, target_csv)
-            # Check if CSV is already in output folder (may happen if working dir = output)
-            elif not os.path.exists(target_csv):
-                print("   ❌ Analysis CSV not found, analysis may have failed.")
-                return None
-
-        # Clean up other generated files
-        geom_csv = f"{name}_CompGeom.csv"
-        if os.path.exists(geom_csv):
-            target_geom = os.path.join(self.output_dir, geom_csv)
-            if os.path.exists(target_geom):
-                os.remove(target_geom)
-            shutil.move(geom_csv, target_geom)
-
-        # Also move .txt files if they exist
-        geom_txt = f"{name}_CompGeom.txt"
-        if os.path.exists(geom_txt):
-            target_txt = os.path.join(self.output_dir, geom_txt)
-            if os.path.exists(target_txt):
-                os.remove(target_txt)
-            shutil.move(geom_txt, target_txt)
-
-        # Parse results
-        return self._parse_csv_results(target_csv, name, velocity, rho)
-
-    def _parse_csv_results(self, csv_filepath, name, velocity, rho):
-        """
-        Parse ParasiteBuildUp CSV to extract drag metrics
-
-        Returns:
-        --------
-        result : dict with keys: name, file, CdA, Swet, Drag, Cd
-        """
-        q = 0.5 * rho * (velocity ** 2)  # Dynamic pressure
-        result = {"name": name, "file": csv_filepath}
+        result_id = vsp.ExecAnalysis(analysis_name)
 
         try:
-            with open(csv_filepath, 'r', newline='', encoding='utf-8') as f:
-                reader = csv.reader(f)
-                rows = list(reader)
-
-                # Find header row to identify column indices
-                header_idx = -1
-                f_idx = -1
-                swet_idx = -1
-                cd_idx = -1
-
-                for i, row in enumerate(rows):
-                    # Check if this is the header row
-                    if len(row) > 0 and "Component Name" in row[0]:
-                        header_idx = i
-                        # Parse header to find column indices
-                        for j, col in enumerate(row):
-                            col_lower = col.lower().strip()
-                            if "s_wet" in col_lower:
-                                swet_idx = j
-                            elif "f (" in col_lower:  # "f (ft^2)"
-                                f_idx = j
-                            elif col_lower == "cd":
-                                cd_idx = j
-                        break
-
-                # Now search for data rows (Total or component name)
-                if header_idx != -1:
-                    for i in range(header_idx + 1, len(rows)):
-                        row = rows[i]
-                        if len(row) > max(f_idx, swet_idx, cd_idx):
-                            row_name = row[0].strip().lower()
-
-                            # Look for "Totals:" or the component name
-                            if "total" in row_name or name.lower() in row_name:
-                                try:
-                                    f_val = float(row[f_idx])
-                                    s_wet = float(row[swet_idx])
-                                    cd_val = float(row[cd_idx])
-
-                                    result["CdA"] = f_val
-                                    result["Swet"] = s_wet
-                                    result["Drag"] = q * f_val
-                                    result["Cd"] = cd_val
-
-                                    return result
-                                except (ValueError, IndexError) as e:
-                                    continue
-
-        except Exception as e:
-            print(f"   ❌ CSV parsing failed: {e}")
+            cd_val = float(vsp.GetDoubleResults(result_id, "Total_CD_Total", 0)[0])
+            swet_vals = vsp.GetDoubleResults(result_id, "Comp_Swet", 0)
+            swet_val = float(sum(swet_vals)) if swet_vals else None
+            cda_vals = vsp.GetDoubleResults(result_id, "Total_f_Total", 0)
+            cda_val = float(cda_vals[0]) if cda_vals else cd_val
+            q = 0.5 * rho * (velocity ** 2)
+            return {
+                "name": name,
+                "file": vsp_filepath,
+                "CdA": cda_val,
+                "Swet": swet_val,
+                "Drag": q * cd_val,
+                "Cd": cd_val,
+            }
+        except Exception as exc:
+            print(f"   ❌ Failed to read ParasiteDrag results directly: {exc}")
             return None
-
-        return None

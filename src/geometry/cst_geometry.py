@@ -11,6 +11,8 @@ import math
 import os
 from typing import Dict, Iterable, List
 
+from utils.openvsp_loader import load_openvsp
+
 
 class CSTGeometryGenerator:
     """Backwards-compatible wrapper around the current geometry pipeline."""
@@ -112,7 +114,7 @@ class CSTGeometryGenerator:
 
     def generate_fuselage(self, design_params: Dict) -> str:
         """Generate a `.vsp3` file using the legacy symmetric CST interface."""
-        import openvsp as vsp
+        vsp = load_openvsp()
 
         name = design_params["name"]
         length = float(design_params["length"])
