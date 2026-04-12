@@ -100,7 +100,7 @@ _hpa_discover_openvsp_python_root() {
         return 0
     fi
 
-    for base_dir in "/Applications" "$HOME/Applications"; do
+    for base_dir in "/Applications" "$HOME/Applications" /Volumes/*/Applications; do
         [ -d "$base_dir" ] || continue
 
         app_path=$(find "$base_dir" -maxdepth 2 -type d -name 'OpenVSP*.app' -print 2>/dev/null | head -n 1)
