@@ -111,6 +111,21 @@ _hpa_discover_openvsp_python_root() {
         fi
     done
 
+    for release_dir in /Volumes/*/Applications/OpenVSP*-MacOS; do
+        [ -d "$release_dir/python" ] || continue
+
+        marker=$(
+            find "$release_dir/python" -maxdepth 3 -type f \
+                \( -path '*/openvsp/__init__.py' -o -name 'openvsp.py' -o -name 'openvsp*.so' -o -name '_vsp*.so' \) \
+                -print 2>/dev/null | head -n 1
+        )
+
+        if [ -n "$marker" ]; then
+            _hpa_find_openvsp_root_from_marker "$marker"
+            return 0
+        fi
+    done
+
     return 1
 }
 
