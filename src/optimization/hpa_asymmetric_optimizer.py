@@ -48,10 +48,13 @@ CSTDerivatives = cst_derivatives.CSTDerivatives
 class ProjectManager:
     """管理專案輸出目錄和檔案"""
 
-    def __init__(self, base_output_dir: str = "output"):
+    def __init__(self, base_output_dir: str = "output", existing_run_dir: str | None = None):
         self.base_dir = Path(base_output_dir)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.run_dir = self.base_dir / f"hpa_run_{timestamp}"
+        if existing_run_dir:
+            self.run_dir = Path(existing_run_dir)
+        else:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.run_dir = self.base_dir / f"hpa_run_{timestamp}"
 
         # 創建子目錄
         self.vsp_dir = self.run_dir / "vsp_models"

@@ -4,19 +4,20 @@ HPA 整流罩 GA 優化運行腳本
 使用方法：
     python scripts/run_ga.py --gen 50 --pop 20
     python scripts/run_ga.py --gen 50 --pop 20 --workers 10  # 10進程平行
+    python scripts/run_ga.py --resume output/hpa_run_xxx       # 從 checkpoint 續跑
     python scripts/run_ga.py --config config/ga_config.json
 
 架構說明：
-    - 主程式（本檔案）：不導入 OpenVSP，只負責 GA 調度
-    - Worker 腳本（run_one_case.py）：獨立進程，負責 VSP 計算
-    - 平行運算：透過 subprocess 呼叫多個獨立 worker
+    - 主程式：負責 GA 調度與 checkpoint 管理
+    - run_one_case.py：提供單個設計的評估函式
+    - 平行運算：使用常駐 ProcessPoolExecutor 重用 worker 進程
 """
 
 import sys
 import os
 import json
 import argparse
-import subprocess
+import pickle
 import numpy as np
 from datetime import datetime
 from pathlib import Path
@@ -28,13 +29,9 @@ sys.path.insert(0, os.path.join(project_root, 'src'))
 
 # 導入優化器模組
 from optimization.hpa_asymmetric_optimizer import (
-    HPA_Optimizer, ProjectManager, CST_Modeler, ConstraintChecker
+    HPA_Optimizer, ProjectManager, CST_Modeler
 )
-
-# Worker 腳本路徑
-WORKER_SCRIPT = os.path.join(os.path.dirname(__file__), 'run_one_case.py')
-PYTHON_EXE = sys.executable  # 使用當前 Python 解釋器
-
+from run_one_case import evaluate_gene
 
 def load_config(config_path: str) -> dict:
     """載入配置檔案"""
@@ -82,56 +79,52 @@ def plot_convergence(history: list, output_path: str):
         print("Warning: matplotlib 未安裝，跳過收斂曲線繪製")
 
 
-def call_worker(gene_dict: dict, name: str, W_area_penalty: float) -> tuple:
-    """
-    呼叫獨立 worker 進程評估一個個體
+def resolve_checkpoint_path(path_str: str) -> Path:
+    path = Path(path_str)
+    if path.is_dir():
+        return path / "checkpoint.pkl"
+    return path
 
-    Returns:
-        (score, log_message)
-    """
+
+def load_checkpoint(path_str: str) -> dict:
+    checkpoint_path = resolve_checkpoint_path(path_str)
+    with open(checkpoint_path, "rb") as f:
+        data = pickle.load(f)
+    data["checkpoint_path"] = str(checkpoint_path)
+    return data
+
+
+def save_checkpoint(pm, callback, algorithm, convergence_history, best_so_far,
+                    generations_without_improvement, total_generations):
+    checkpoint = {
+        "generation": callback.n_gen,
+        "population_X": algorithm.pop.get("X"),
+        "population_F": algorithm.pop.get("F"),
+        "convergence_history": convergence_history,
+        "best_so_far": best_so_far,
+        "generations_without_improvement": generations_without_improvement,
+        "numpy_random_state": np.random.get_state(),
+        "run_dir": str(pm.run_dir),
+        "total_generations": total_generations,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+    checkpoint_path = pm.run_dir / "checkpoint.pkl"
+    temp_path = checkpoint_path.with_suffix(".tmp")
+    with open(temp_path, "wb") as f:
+        pickle.dump(checkpoint, f)
+    temp_path.replace(checkpoint_path)
+
+
+def call_worker(gene_dict: dict, name: str, W_area_penalty: float) -> float:
+    """直接在常駐 worker 進程中評估單一個體。"""
     try:
-        # 將基因轉為 JSON 字串
-        gene_json = json.dumps(gene_dict)
-
-        # 呼叫 worker 腳本
-        result = subprocess.run(
-            [PYTHON_EXE, WORKER_SCRIPT,
-             '--gene', gene_json,
-             '--name', name,
-             '--penalty', str(W_area_penalty)],
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            errors='replace',  # 處理非 UTF-8 字元
-            timeout=120  # 2分鐘超時
-        )
-
-        # 解析 stdout 獲取分數
-        stdout = result.stdout.strip()
-        stderr = result.stderr.strip()
-
-        # 找到 "SCORE:xxx" 行
-        score = 1e6
-        for line in stdout.split('\n'):
-            if line.startswith('SCORE:'):
-                try:
-                    score = float(line.split(':')[1])
-                except:
-                    pass
-                break
-
-        # stderr 包含日誌訊息
-        log_msg = stderr if stderr else None
-
-        return score, log_msg
-
-    except subprocess.TimeoutExpired:
-        return 1e6, f"{name}: 超時"
+        return float(evaluate_gene(gene_dict, name, W_area_penalty))
     except Exception as e:
-        return 1e6, f"{name}: Worker呼叫失敗 - {e}"
+        raise RuntimeError(f"{name}: Worker評估失敗 - {e}") from e
 
 
-def evaluate_population_parallel(population, gen, gene_bounds, W_area_penalty, n_workers, pm, optimizer=None):
+def evaluate_population_parallel(population, gen, gene_bounds, W_area_penalty, n_workers, pm, optimizer=None, executor=None):
     """
     評估整個族群
 
@@ -150,22 +143,28 @@ def evaluate_population_parallel(population, gen, gene_bounds, W_area_penalty, n
     keys = list(gene_bounds.keys())
     fitness = []
 
-    if n_workers > 1 and optimizer is None:
-        # 平行模式：使用 subprocess 呼叫獨立 worker
+    if n_workers > 1 and optimizer is None and executor is not None:
+        # 平行模式：使用常駐 ProcessPoolExecutor，避免每個個體重啟 Python
         tasks = []
         for i, gene_array in enumerate(population):
             gene_dict = {k: gene_array[j] for j, k in enumerate(keys)}
             name = f"gen{gen:03d}_ind{i:03d}"
             tasks.append((gene_dict, name, W_area_penalty))
 
-        from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=n_workers) as executor:
-            futures = [executor.submit(call_worker, *task) for task in tasks]
-            for future in futures:
-                score, log_msg = future.result()
-                fitness.append(score)
-                if log_msg:
-                    pm.log(log_msg)
+        ordered_fitness = [1e6] * len(tasks)
+        future_to_index = {
+            executor.submit(call_worker, *task): index for index, task in enumerate(tasks)
+        }
+
+        for future in as_completed(future_to_index):
+            index = future_to_index[future]
+            try:
+                ordered_fitness[index] = future.result()
+            except Exception as e:
+                pm.log(str(e))
+                ordered_fitness[index] = 1e6
+
+        fitness.extend(ordered_fitness)
     else:
         # 單執行緒模式：使用 HPA_Optimizer（穩定版）
         for i, gene_array in enumerate(population):
@@ -177,6 +176,8 @@ def evaluate_population_parallel(population, gen, gene_bounds, W_area_penalty, n
 
 def run_optimization(args):
     """運行 GA 優化"""
+
+    checkpoint = load_checkpoint(args.resume) if args.resume else None
 
     # 載入配置
     config_path = args.config or os.path.join(project_root, 'config', 'ga_config.json')
@@ -197,10 +198,20 @@ def run_optimization(args):
         print("使用預設流體條件")
 
     # 優先使用命令行參數
-    n_gen = args.gen or config.get('ga_settings', {}).get('n_generations', 50)
+    n_gen = args.gen or (
+        checkpoint.get('total_generations') if checkpoint else None
+    ) or config.get('ga_settings', {}).get('n_generations', 50)
     pop_size = args.pop or config.get('ga_settings', {}).get('population_size', 20)
     seed = args.seed or config.get('ga_settings', {}).get('seed', 42)
     convergence_tol = args.tol or 10  # 預設10代不改善就停止
+
+    start_generation = checkpoint.get('generation', 0) if checkpoint else 0
+    resume_population_data = checkpoint.get('population_X') if checkpoint else None
+    if resume_population_data is not None:
+        pop_size = len(resume_population_data)
+    if checkpoint and start_generation >= n_gen:
+        print(f"Checkpoint 已經到第 {start_generation} 代，目標代數 {n_gen} 無需繼續。")
+        return None
 
     # 平行運算設定（預設保留2核給系統）
     max_workers = max(1, os.cpu_count() - 2)
@@ -222,6 +233,8 @@ def run_optimization(args):
     print(f"面積懲罰因子: {W_area_penalty} N/m²")
     print(f"適應度公式: Score = Drag + {W_area_penalty} × Swet")
     print(f"平行運算: {n_workers} 進程" + (f"（可用上限: {max_workers}）" if n_workers > 1 else ""))
+    if checkpoint:
+        print(f"續跑模式: 從第 {start_generation} 代繼續到第 {n_gen} 代")
     print(f"{'='*60}\n")
 
     # 檢查 pymoo
@@ -239,19 +252,26 @@ def run_optimization(args):
         return None
 
     # 創建專案管理器
-    pm = ProjectManager(base_output_dir="output")
+    pm = ProjectManager(
+        base_output_dir="output",
+        existing_run_dir=checkpoint.get('run_dir') if checkpoint else None,
+    )
+    if checkpoint:
+        pm.log(f"從 checkpoint 續跑: {checkpoint['checkpoint_path']}")
     pm.log(f"開始 GA 優化: 最多 {n_gen} 代, 族群大小 {pop_size}, {n_workers} 進程")
 
     # 保存配置
-    with open(pm.log_dir / 'config_used.json', 'w', encoding='utf-8') as f:
-        json.dump({
-            'ga_config': config,
-            'fluid_conditions': fluid,
-            'cli_args': vars(args)
-        }, f, indent=2, ensure_ascii=False)
+    if not checkpoint:
+        with open(pm.log_dir / 'config_used.json', 'w', encoding='utf-8') as f:
+            json.dump({
+                'ga_config': config,
+                'fluid_conditions': fluid,
+                'cli_args': vars(args)
+            }, f, indent=2, ensure_ascii=False)
 
     # 創建優化器（單執行緒模式使用）
     optimizer = HPA_Optimizer(pm, W_area_penalty=W_area_penalty) if n_workers == 1 else None
+    executor = ProcessPoolExecutor(max_workers=n_workers) if n_workers > 1 else None
 
     # 使用優化器的基因範圍
     GENE_BOUNDS = HPA_Optimizer.GENE_BOUNDS
@@ -260,10 +280,18 @@ def run_optimization(args):
     upper = np.array([GENE_BOUNDS[k][1] for k in keys])
 
     # 收斂歷史和追蹤
-    convergence_history = []
-    best_so_far = float('inf')
-    generations_without_improvement = 0
+    convergence_history = checkpoint.get('convergence_history', []) if checkpoint else []
+    best_so_far = checkpoint.get('best_so_far', float('inf')) if checkpoint else float('inf')
+    generations_without_improvement = checkpoint.get('generations_without_improvement', 0) if checkpoint else 0
     should_terminate = False
+
+    if checkpoint and 'numpy_random_state' in checkpoint:
+        np.random.set_state(checkpoint['numpy_random_state'])
+
+    resume_population = np.array(resume_population_data) if resume_population_data is not None else None
+    if resume_population is not None:
+        pop_size = len(resume_population)
+        pm.log(f"載入 checkpoint population: {pop_size} 個體")
 
     # 定義問題
     class HPAProblem(Problem):
@@ -283,7 +311,7 @@ def run_optimization(args):
 
             # 評估族群（單執行緒或平行模式）
             fitness = evaluate_population_parallel(
-                X, gen, GENE_BOUNDS, W_area_penalty, n_workers, pm, optimizer
+                X, gen, GENE_BOUNDS, W_area_penalty, n_workers, pm, optimizer, executor
             )
 
             out["F"] = fitness.reshape(-1, 1)
@@ -292,7 +320,7 @@ def run_optimization(args):
     class ConvergenceCallback(Callback):
         def __init__(self):
             super().__init__()
-            self.n_gen = 0
+            self.n_gen = start_generation
             self.best_history = []
 
         def notify(self, algorithm):
@@ -344,6 +372,16 @@ def run_optimization(args):
                 with open(pm.log_dir / 'convergence_history.json', 'w', encoding='utf-8') as f:
                     json.dump(convergence_history, f, indent=2)
 
+            save_checkpoint(
+                pm,
+                self,
+                algorithm,
+                convergence_history,
+                best_so_far,
+                generations_without_improvement,
+                n_gen,
+            )
+
     # 創建問題和回調
     problem = HPAProblem()
     callback = ConvergenceCallback()
@@ -351,7 +389,7 @@ def run_optimization(args):
     # 設置 GA 演算法
     algorithm = GA(
         pop_size=pop_size,
-        sampling=FloatRandomSampling(),
+        sampling=resume_population if resume_population is not None else FloatRandomSampling(),
         crossover=SBX(
             prob=config.get('ga_settings', {}).get('crossover_probability', 0.9),
             eta=config.get('ga_settings', {}).get('crossover_eta', 15)
@@ -360,18 +398,27 @@ def run_optimization(args):
         eliminate_duplicates=config.get('ga_settings', {}).get('eliminate_duplicates', True)
     )
 
+    remaining_generations = n_gen - start_generation
+
+    # 續跑時應保留 checkpoint 中的 numpy RNG 狀態，避免又被 seed 重設。
+    optimization_seed = None if checkpoint and 'numpy_random_state' in checkpoint else seed
+
     # 執行優化
     pm.log("開始 GA 演算法...")
     start_time = datetime.now()
 
-    res = minimize(
-        problem,
-        algorithm,
-        ('n_gen', n_gen),
-        callback=callback,
-        verbose=False,  # 使用自己的日誌
-        seed=seed
-    )
+    try:
+        res = minimize(
+            problem,
+            algorithm,
+            ('n_gen', remaining_generations),
+            callback=callback,
+            verbose=False,  # 使用自己的日誌
+            seed=optimization_seed
+        )
+    finally:
+        if executor is not None:
+            executor.shutdown(wait=True, cancel_futures=False)
 
     end_time = datetime.now()
     elapsed = (end_time - start_time).total_seconds()
@@ -401,10 +448,11 @@ def run_optimization(args):
         VSPModelGenerator.create_fuselage(curves, 'best_design', best_vsp_path)
         pm.log(f"最佳模型已生成: {best_vsp_path}")
     else:
-        # 平行模式：呼叫 worker
-        score, log_msg = call_worker(best_gene, 'best_design', W_area_penalty)
-        if log_msg:
-            pm.log(log_msg)
+        # 平行模式：直接生成最佳模型，不再額外透過一次 worker 子程序
+        from optimization.hpa_asymmetric_optimizer import VSPModelGenerator
+        curves = CST_Modeler.generate_asymmetric_fairing(best_gene)
+        VSPModelGenerator.create_fuselage(curves, 'best_design', best_vsp_path)
+        pm.log(f"最佳模型已生成: {best_vsp_path}")
 
     # 輸出結果
     pm.log(f"\n{'='*60}")
@@ -435,6 +483,7 @@ def main():
     parser.add_argument('--workers', type=int, help='平行運算進程數（預設1，建議8-18）')
     parser.add_argument('--config', type=str, help='GA 配置檔案路徑')
     parser.add_argument('--fluid', type=str, help='流體條件配置檔案路徑')
+    parser.add_argument('--resume', type=str, help='從 checkpoint.pkl 或其所在目錄續跑')
 
     args = parser.parse_args()
 
