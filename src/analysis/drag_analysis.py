@@ -8,7 +8,8 @@ The validated path on this project is:
 4. read the result fields directly from the OpenVSP results API.
 
 This keeps the same aerodynamic outputs as the old file-based workflow while
-removing the extra CSV parsing cost from the GA hot path.
+allowing GA callers to skip the extra `.vsp3` write/read cycle when the model
+is already available in memory.
 """
 import os
 
@@ -37,33 +38,26 @@ class DragAnalyzer:
         if fallback_name and fallback_name in input_names:
             vsp.SetIntAnalysisInput(analysis_name, fallback_name, [int(value)])
 
-    def run_analysis(self, vsp_filepath, velocity, rho, mu):
-        """
-        Execute Parasite Drag analysis and parse results
+    @staticmethod
+    def _read_parasite_drag_results(vsp, result_id, name, result_ref, velocity, rho):
+        cd_val = float(vsp.GetDoubleResults(result_id, "Total_CD_Total", 0)[0])
+        swet_vals = vsp.GetDoubleResults(result_id, "Comp_Swet", 0)
+        swet_val = float(sum(swet_vals)) if swet_vals else None
+        cda_vals = vsp.GetDoubleResults(result_id, "Total_f_Total", 0)
+        cda_val = float(cda_vals[0]) if cda_vals else cd_val
+        q = 0.5 * rho * (velocity ** 2)
+        return {
+            "name": name,
+            "file": result_ref,
+            "CdA": cda_val,
+            "Swet": swet_val,
+            "Drag": q * cd_val,
+            "Cd": cd_val,
+        }
 
-        Parameters:
-        -----------
-        vsp_filepath : str
-            Path to .vsp3 file
-        velocity : float
-            Freestream velocity (m/s)
-        rho : float
-            Air density (kg/m^3)
-        mu : float
-            Dynamic viscosity (kg/m·s)
-
-        Returns:
-        --------
-        result : dict
-            Analysis results including Drag, CdA, Cd, Swet
-        """
-        name = os.path.basename(vsp_filepath).replace(".vsp3", "")
+    def _exec_parasite_drag(self, vsp, name, result_ref, velocity, rho, mu):
         print(f"   🌪️  [Analysis] Computing aerodynamics for {name}...")
-        vsp = load_openvsp()
 
-        # Load model
-        vsp.ClearVSPModel()
-        vsp.ReadVSPFile(vsp_filepath)
         vsp.Update()
 
         analysis_name = "ParasiteDrag"
@@ -84,20 +78,29 @@ class DragAnalyzer:
         result_id = vsp.ExecAnalysis(analysis_name)
 
         try:
-            cd_val = float(vsp.GetDoubleResults(result_id, "Total_CD_Total", 0)[0])
-            swet_vals = vsp.GetDoubleResults(result_id, "Comp_Swet", 0)
-            swet_val = float(sum(swet_vals)) if swet_vals else None
-            cda_vals = vsp.GetDoubleResults(result_id, "Total_f_Total", 0)
-            cda_val = float(cda_vals[0]) if cda_vals else cd_val
-            q = 0.5 * rho * (velocity ** 2)
-            return {
-                "name": name,
-                "file": vsp_filepath,
-                "CdA": cda_val,
-                "Swet": swet_val,
-                "Drag": q * cd_val,
-                "Cd": cd_val,
-            }
+            return self._read_parasite_drag_results(vsp, result_id, name, result_ref, velocity, rho)
         except Exception as exc:
             print(f"   ❌ Failed to read ParasiteDrag results directly: {exc}")
             return None
+
+    def run_analysis(self, vsp_filepath, velocity, rho, mu):
+        """
+        Execute Parasite Drag analysis for a `.vsp3` file.
+        """
+        vsp = load_openvsp()
+        name = os.path.basename(vsp_filepath).replace(".vsp3", "")
+
+        vsp.ClearVSPModel()
+        vsp.ReadVSPFile(vsp_filepath)
+
+        return self._exec_parasite_drag(vsp, name, vsp_filepath, velocity, rho, mu)
+
+    def run_analysis_current_model(self, name, velocity, rho, mu):
+        """
+        Execute Parasite Drag analysis for the model currently loaded in OpenVSP.
+
+        This avoids writing a temporary `.vsp3` file and reading it back when the
+        caller already built the geometry in the current process.
+        """
+        vsp = load_openvsp()
+        return self._exec_parasite_drag(vsp, name, "<in-memory>", velocity, rho, mu)

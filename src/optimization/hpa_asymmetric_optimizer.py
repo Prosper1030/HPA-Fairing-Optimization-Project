@@ -775,19 +775,23 @@ class HPA_Optimizer:
             # 限制失敗，返回懲罰值
             return 1e6
 
-        # 3. 生成 VSP 模型
+        # 3. 生成 VSP 模型（GA 熱路徑只保留在記憶體中）
         name = f"gen{gen:03d}_ind{ind:03d}"
-        vsp_path = self.pm.get_vsp_path(name)
 
         try:
-            VSPModelGenerator.create_fuselage(curves, name, filepath=vsp_path)
+            VSPModelGenerator.create_fuselage(curves, name, filepath=None)
         except Exception as e:
             self.pm.log(f"VSP 生成失敗 ({name}): {e}")
             return 1e6
 
-        # 4. 計算阻力（保留檔案載入流程以確保與已驗證結果一致）
+        # 4. 計算阻力（直接分析當前記憶體中的 OpenVSP 模型）
         try:
-            result = self.drag_analyzer.run_analysis(vsp_path, velocity=6.5, rho=1.225, mu=1.7894e-5)
+            result = self.drag_analyzer.run_analysis_current_model(
+                name,
+                velocity=6.5,
+                rho=1.225,
+                mu=1.7894e-5,
+            )
             if not result:
                 self.pm.log(f"阻力計算失敗 ({name}): 無法取得 ParasiteDrag 結果")
                 return 1e6

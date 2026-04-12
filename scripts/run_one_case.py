@@ -16,8 +16,6 @@ import sys
 import os
 import json
 import argparse
-import tempfile
-import shutil
 
 # 添加專案路徑
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -36,8 +34,6 @@ def evaluate_gene(gene: dict, name: str, W_area_penalty: float = 0.1) -> float:
     Returns:
         score (float): 適應度分數，越小越好
     """
-    temp_dir = tempfile.mkdtemp(prefix=f"vsp_{name}_")
-
     try:
         # 1. 生成幾何曲線
         curves = CST_Modeler.generate_asymmetric_fairing(gene)
@@ -47,18 +43,17 @@ def evaluate_gene(gene: dict, name: str, W_area_penalty: float = 0.1) -> float:
         if not passed:
             return 1e6
 
-        # 3. 生成 VSP 模型
-        vsp_path = os.path.join(temp_dir, f"{name}.vsp3")
+        # 3. 生成 VSP 模型（直接保留在記憶體中）
         try:
-            VSPModelGenerator.create_fuselage(curves, name, filepath=vsp_path)
+            VSPModelGenerator.create_fuselage(curves, name, filepath=None)
         except Exception as e:
             print(f"VSP生成失敗: {e}", file=sys.stderr)
             return 1e6
 
-        # 4. 計算阻力（使用已驗證的檔案載入流程）
+        # 4. 計算阻力（直接分析當前記憶體中的 OpenVSP 模型）
         try:
-            analyzer = DragAnalyzer(output_dir=temp_dir)
-            result = analyzer.run_analysis(vsp_path, velocity=6.5, rho=1.225, mu=1.7894e-5)
+            analyzer = DragAnalyzer()
+            result = analyzer.run_analysis_current_model(name, velocity=6.5, rho=1.225, mu=1.7894e-5)
             if not result:
                 print(f"{name}: 分析失敗", file=sys.stderr)
                 return 1e6
@@ -88,8 +83,6 @@ def evaluate_gene(gene: dict, name: str, W_area_penalty: float = 0.1) -> float:
     except Exception as e:
         print(f"Worker錯誤: {e}", file=sys.stderr)
         return 1e6
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def main():
