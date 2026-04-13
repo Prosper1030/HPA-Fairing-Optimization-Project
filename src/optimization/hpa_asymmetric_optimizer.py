@@ -23,6 +23,7 @@ if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
 from analysis.drag_analysis import DragAnalyzer
+from analysis.fairing_drag_proxy import FairingDragProxy
 from utils.openvsp_loader import load_openvsp
 
 # 導入數學工具（來自 src/math/）
@@ -747,13 +748,32 @@ class HPA_Optimizer:
         'w3': (0.05, 0.20),           # 尾部收斂
     }
 
-    def __init__(self, project_manager: ProjectManager, W_area_penalty: float = 0.1):
+    def __init__(
+        self,
+        project_manager: ProjectManager,
+        W_area_penalty: float = 0.1,
+        analysis_mode: str = "openvsp",
+        flow_conditions: Dict | None = None,
+    ):
         self.pm = project_manager
+        self.analysis_mode = analysis_mode
+        flow_conditions = flow_conditions or {}
+        self.velocity = float(flow_conditions.get("velocity", 6.5))
+        self.rho = float(flow_conditions.get("rho", 1.225))
+        self.mu = float(flow_conditions.get("mu", 1.7894e-5))
+
         # 統一透過 OpenVSP results API 讀取結果，避免 GA 熱路徑再做 CSV 解析。
         self.drag_analyzer = DragAnalyzer(output_dir=str(self.pm.vsp_dir))
+        self.proxy_analyzer = FairingDragProxy(
+            velocity=self.velocity,
+            rho=self.rho,
+            mu=self.mu,
+            s_ref=1.0,
+        )
         # 面積懲罰因子 (N/m²)：Score = Drag + W_area_penalty × S_wet
         self.W_area_penalty = W_area_penalty
         self.pm.log(f"面積懲罰因子 W_area_penalty = {W_area_penalty} N/m²")
+        self.pm.log(f"評估模式 = {self.analysis_mode}")
 
     def evaluate_individual(self, gene_array: np.ndarray, gen: int, ind: int) -> float:
         """
@@ -775,9 +795,29 @@ class HPA_Optimizer:
             # 限制失敗，返回懲罰值
             return 1e6
 
-        # 3. 生成 VSP 模型（GA 熱路徑只保留在記憶體中）
         name = f"gen{gen:03d}_ind{ind:03d}"
 
+        if self.analysis_mode == "proxy":
+            try:
+                result = self.proxy_analyzer.evaluate_curves(curves)
+                drag = result["Drag"]
+                swet = result.get("Swet")
+                cd = result["Cd"]
+                area_penalty = self.W_area_penalty * swet
+                score = drag + area_penalty
+                self.pm.log(
+                    f"{name}: [proxy] Cd={cd:.6f}, Swet={swet:.3f}m², "
+                    f"Drag={drag:.4f}N, Lam={result['LaminarFraction']:.2f}, "
+                    f"Score={score:.4f}N"
+                )
+                return score
+            except Exception as e:
+                self.pm.log(f"Proxy 阻力計算失敗 ({name}): {e}")
+                import traceback
+                self.pm.log(traceback.format_exc())
+                return 1e6
+
+        # 3. 生成 VSP 模型（GA 熱路徑只保留在記憶體中）
         try:
             VSPModelGenerator.create_fuselage(curves, name, filepath=None)
         except Exception as e:
@@ -788,9 +828,9 @@ class HPA_Optimizer:
         try:
             result = self.drag_analyzer.run_analysis_current_model(
                 name,
-                velocity=6.5,
-                rho=1.225,
-                mu=1.7894e-5,
+                velocity=self.velocity,
+                rho=self.rho,
+                mu=self.mu,
             )
             if not result:
                 self.pm.log(f"阻力計算失敗 ({name}): 無法取得 ParasiteDrag 結果")

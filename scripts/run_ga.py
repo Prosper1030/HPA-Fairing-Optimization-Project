@@ -116,15 +116,40 @@ def save_checkpoint(pm, callback, algorithm, convergence_history, best_so_far,
     temp_path.replace(checkpoint_path)
 
 
-def call_worker(gene_dict: dict, name: str, W_area_penalty: float) -> float:
+def call_worker(
+    gene_dict: dict,
+    name: str,
+    W_area_penalty: float,
+    analysis_mode: str,
+    flow_conditions: dict,
+) -> float:
     """直接在常駐 worker 進程中評估單一個體。"""
     try:
-        return float(evaluate_gene(gene_dict, name, W_area_penalty))
+        return float(
+            evaluate_gene(
+                gene_dict,
+                name,
+                W_area_penalty,
+                analysis_mode=analysis_mode,
+                flow_conditions=flow_conditions,
+            )
+        )
     except Exception as e:
         raise RuntimeError(f"{name}: Worker評估失敗 - {e}") from e
 
 
-def evaluate_population_parallel(population, gen, gene_bounds, W_area_penalty, n_workers, pm, optimizer=None, executor=None):
+def evaluate_population_parallel(
+    population,
+    gen,
+    gene_bounds,
+    W_area_penalty,
+    n_workers,
+    pm,
+    analysis_mode,
+    flow_conditions,
+    optimizer=None,
+    executor=None,
+):
     """
     評估整個族群
 
@@ -149,7 +174,7 @@ def evaluate_population_parallel(population, gen, gene_bounds, W_area_penalty, n
         for i, gene_array in enumerate(population):
             gene_dict = {k: gene_array[j] for j, k in enumerate(keys)}
             name = f"gen{gen:03d}_ind{i:03d}"
-            tasks.append((gene_dict, name, W_area_penalty))
+            tasks.append((gene_dict, name, W_area_penalty, analysis_mode, flow_conditions))
 
         ordered_fitness = [1e6] * len(tasks)
         future_to_index = {
@@ -222,6 +247,13 @@ def run_optimization(args):
 
     # 讀取面積懲罰因子
     W_area_penalty = config.get('fitness', {}).get('W_area_penalty', 0.1)
+    analysis_mode = args.analysis_mode or config.get('fitness', {}).get('analysis_mode', 'openvsp')
+    flow_block = fluid.get('flow_conditions', {})
+    flow_conditions = {
+        'velocity': flow_block.get('velocity', {}).get('value', 6.5),
+        'rho': flow_block.get('density', {}).get('value', 1.225),
+        'mu': flow_block.get('viscosity', {}).get('value', 1.7894e-5),
+    }
 
     print(f"\n{'='*60}")
     print(f"HPA 整流罩 GA 優化（外包工頭模式）")
@@ -231,6 +263,7 @@ def run_optimization(args):
     print(f"隨機種子: {seed}")
     print(f"收斂容忍度: {convergence_tol} 代不改善則停止")
     print(f"面積懲罰因子: {W_area_penalty} N/m²")
+    print(f"評估模式: {analysis_mode}")
     print(f"適應度公式: Score = Drag + {W_area_penalty} × Swet")
     print(f"平行運算: {n_workers} 進程" + (f"（可用上限: {max_workers}）" if n_workers > 1 else ""))
     if checkpoint:
@@ -270,7 +303,15 @@ def run_optimization(args):
             }, f, indent=2, ensure_ascii=False)
 
     # 創建優化器（單執行緒模式使用）
-    optimizer = HPA_Optimizer(pm, W_area_penalty=W_area_penalty) if n_workers == 1 else None
+    optimizer = (
+        HPA_Optimizer(
+            pm,
+            W_area_penalty=W_area_penalty,
+            analysis_mode=analysis_mode,
+            flow_conditions=flow_conditions,
+        )
+        if n_workers == 1 else None
+    )
     executor = ProcessPoolExecutor(max_workers=n_workers) if n_workers > 1 else None
 
     # 使用優化器的基因範圍
@@ -311,7 +352,16 @@ def run_optimization(args):
 
             # 評估族群（單執行緒或平行模式）
             fitness = evaluate_population_parallel(
-                X, gen, GENE_BOUNDS, W_area_penalty, n_workers, pm, optimizer, executor
+                X,
+                gen,
+                GENE_BOUNDS,
+                W_area_penalty,
+                n_workers,
+                pm,
+                analysis_mode,
+                flow_conditions,
+                optimizer,
+                executor,
             )
 
             out["F"] = fitness.reshape(-1, 1)
@@ -437,18 +487,12 @@ def run_optimization(args):
     if convergence_history:
         plot_convergence(convergence_history, str(pm.log_dir / 'convergence.png'))
 
-    # 生成最佳模型
-    pm.log("生成最佳模型...")
-    best_vsp_path = str(pm.vsp_dir / 'best_design.vsp3')
-
-    if optimizer:
-        # 單執行緒模式：直接使用優化器
-        from optimization.hpa_asymmetric_optimizer import VSPModelGenerator
-        curves = CST_Modeler.generate_asymmetric_fairing(best_gene)
-        VSPModelGenerator.create_fuselage(curves, 'best_design', best_vsp_path)
-        pm.log(f"最佳模型已生成: {best_vsp_path}")
+    if args.skip_final_vsp:
+        pm.log("跳過最終 VSP 匯出（--skip-final-vsp）")
     else:
-        # 平行模式：直接生成最佳模型，不再額外透過一次 worker 子程序
+        # 生成最佳模型
+        pm.log("生成最佳模型...")
+        best_vsp_path = str(pm.vsp_dir / 'best_design.vsp3')
         from optimization.hpa_asymmetric_optimizer import VSPModelGenerator
         curves = CST_Modeler.generate_asymmetric_fairing(best_gene)
         VSPModelGenerator.create_fuselage(curves, 'best_design', best_vsp_path)
@@ -484,6 +528,10 @@ def main():
     parser.add_argument('--config', type=str, help='GA 配置檔案路徑')
     parser.add_argument('--fluid', type=str, help='流體條件配置檔案路徑')
     parser.add_argument('--resume', type=str, help='從 checkpoint.pkl 或其所在目錄續跑')
+    parser.add_argument('--analysis-mode', choices=['openvsp', 'proxy'],
+                        help='阻力評估模式（預設讀 config，否則 openvsp）')
+    parser.add_argument('--skip-final-vsp', action='store_true',
+                        help='跳過最佳解的最終 .vsp3 匯出，適合大量快速探索')
 
     args = parser.parse_args()
 
