@@ -1,27 +1,496 @@
 """
-Reserved interface for future shortlist-level high-fidelity validation.
+Prepare shortlist-level high-fidelity validation bundles.
 
-The project plans to use SU2 for final verification only. The fast proxy remains
-the only production analysis path for now.
+The current implementation focuses on creating a reproducible SU2 work package
+for a small number of candidates. It does not mesh or run SU2 automatically;
+instead, it writes the geometry tables, proxy baselines, starter SU2 config,
+and shell helpers needed for the final validation stage.
 """
 
 from __future__ import annotations
 
-from typing import Iterable, Mapping
+from collections.abc import Iterable, Mapping
+from datetime import datetime
+from pathlib import Path
+import json
+import re
+
+import numpy as np
+
+from analysis.fairing_analysis import (
+    AnalysisInputError,
+    analyze_gene,
+    get_example_gene,
+    load_flow_conditions,
+    normalize_gene,
+    write_analysis_report_bundle,
+)
+
+
+DEFAULT_SU2_SETTINGS = {
+    "solver": "INC_NAVIER_STOKES",
+    "iterations": 1500,
+    "inner_iterations": 50,
+    "cfl": 10.0,
+    "marker_wall": "fairing",
+    "marker_far": "farfield",
+    "mesh_filename": "fairing_mesh.su2",
+    "mesh_format": "SU2",
+    "objective_function": "DRAG",
+}
+
+SU2_DOC_LINKS = {
+    "configuration": "https://su2code.github.io/docs_v7/Configuration-File/",
+    "physical_definition": "https://su2code.github.io/docs_v7/Physical-Definition/",
+    "incompressible_tutorial": "https://su2code.github.io/tutorials/Inc_Von_Karman/",
+    "download": "https://su2code.github.io/download.html",
+}
 
 
 class HighFidelityValidationNotReady(NotImplementedError):
     """Raised when a planned high-fidelity backend is not implemented yet."""
 
 
+def _json_default(value):
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, (np.floating, np.integer)):
+        return value.item()
+    if isinstance(value, np.bool_):
+        return bool(value)
+    if isinstance(value, Path):
+        return str(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _sanitize_case_name(name: str) -> str:
+    candidate = re.sub(r"[^A-Za-z0-9._-]+", "_", name.strip())
+    candidate = candidate.strip("._-")
+    return candidate or "candidate"
+
+
+def _make_unique_case_name(name: str, used_names: set[str]) -> str:
+    base = _sanitize_case_name(name)
+    candidate = base
+    suffix = 2
+    while candidate in used_names:
+        candidate = f"{base}_{suffix}"
+        suffix += 1
+    used_names.add(candidate)
+    return candidate
+
+
+def _candidate_name(candidate: Mapping, index: int) -> str:
+    for key in ("name", "CaseName", "case_name", "id", "label"):
+        value = candidate.get(key)
+        if value:
+            return str(value)
+    return f"candidate_{index:02d}"
+
+
+def _extract_gene(candidate: Mapping, *, fill_missing_from_example: bool) -> tuple[dict, dict]:
+    if "gene" in candidate and isinstance(candidate["gene"], Mapping):
+        raw_gene = dict(candidate["gene"])
+    else:
+        raw_gene = dict(candidate)
+
+    fallback = get_example_gene() if fill_missing_from_example else None
+    normalized_gene, metadata = normalize_gene(
+        raw_gene,
+        fallback_gene=fallback,
+        return_metadata=True,
+    )
+    return normalized_gene, metadata
+
+
+def _temperature_to_kelvin(value: float) -> float:
+    # The project flow config historically stores temperature in Celsius, while
+    # SU2 expects Kelvin in the config. Values above 170 are treated as already
+    # expressed in Kelvin.
+    if value > 170.0:
+        return value
+    return value + 273.15
+
+
+def _compute_reynolds_number(gene: dict, flow_conditions: dict) -> float:
+    velocity = float(flow_conditions["velocity"])
+    rho = float(flow_conditions["rho"])
+    mu = float(flow_conditions["mu"])
+    length = float(gene["L"])
+    return rho * velocity * length / max(mu, 1e-12)
+
+
+def _write_geometry_table(curves: dict, output_path: Path) -> None:
+    headers = [
+        "index",
+        "psi",
+        "x",
+        "width_half",
+        "width",
+        "top",
+        "bottom",
+        "z_upper",
+        "z_lower",
+    ]
+    lines = [",".join(headers)]
+    count = len(curves["x"])
+    for i in range(count):
+        lines.append(
+            ",".join(
+                [
+                    str(i),
+                    f"{float(curves['psi'][i]):.10f}",
+                    f"{float(curves['x'][i]):.10f}",
+                    f"{float(curves['width_half'][i]):.10f}",
+                    f"{float(curves['width'][i]):.10f}",
+                    f"{float(curves['top'][i]):.10f}",
+                    f"{float(curves['bottom'][i]):.10f}",
+                    f"{float(curves['z_upper'][i]):.10f}",
+                    f"{float(curves['z_lower'][i]):.10f}",
+                ]
+            )
+        )
+    output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _build_su2_config(case_name: str, gene: dict, flow_conditions: dict, su2_settings: dict) -> str:
+    velocity = float(flow_conditions["velocity"])
+    rho = float(flow_conditions["rho"])
+    mu = float(flow_conditions["mu"])
+    temp_k = _temperature_to_kelvin(float(flow_conditions["temperature"]))
+    reynolds = _compute_reynolds_number(gene, flow_conditions)
+
+    return (
+        "% SU2 shortlist validation template generated by HPA Fairing Optimization Project\n"
+        f"% Case: {case_name}\n"
+        "% Replace the placeholder mesh with your final .su2 mesh before running.\n"
+        "% Mesh markers must include the wall marker and far-field marker listed below.\n"
+        "\n"
+        f"SOLVER= {su2_settings['solver']}\n"
+        "MATH_PROBLEM= DIRECT\n"
+        "SYSTEM_MEASUREMENTS= SI\n"
+        "RESTART_SOL= NO\n"
+        "\n"
+        f"ITER= {int(su2_settings['iterations'])}\n"
+        f"INNER_ITER= {int(su2_settings['inner_iterations'])}\n"
+        "CONV_FIELD= DRAG\n"
+        "CONV_RESIDUAL_MINVAL= -10\n"
+        f"CFL_NUMBER= {float(su2_settings['cfl']):.2f}\n"
+        "CFL_ADAPT= NO\n"
+        "TIME_DOMAIN= NO\n"
+        "TIME_MARCHING= NO\n"
+        "\n"
+        "INC_DENSITY_MODEL= CONSTANT\n"
+        "INC_ENERGY_EQUATION= NO\n"
+        f"INC_DENSITY_INIT= {rho:.8f}\n"
+        f"INC_VELOCITY_INIT= ( {velocity:.8f}, 0.0, 0.0 )\n"
+        f"INC_TEMPERATURE_INIT= {temp_k:.8f}\n"
+        "INC_NONDIM= DIMENSIONAL\n"
+        "\n"
+        "FLUID_MODEL= CONSTANT_DENSITY\n"
+        "VISCOSITY_MODEL= CONSTANT_VISCOSITY\n"
+        f"MU_CONSTANT= {mu:.10e}\n"
+        "\n"
+        f"REF_LENGTH= {float(gene['L']):.8f}\n"
+        f"REF_VELOCITY= {velocity:.8f}\n"
+        f"REF_VISCOSITY= {mu:.10e}\n"
+        "REF_AREA= 1.0\n"
+        f"OBJECTIVE_FUNCTION= {su2_settings['objective_function']}\n"
+        f"MARKER_MONITORING = ( {su2_settings['marker_wall']} )\n"
+        f"MARKER_PLOTTING = ( {su2_settings['marker_wall']} )\n"
+        "\n"
+        f"MESH_FILENAME= {su2_settings['mesh_filename']}\n"
+        f"MESH_FORMAT= {su2_settings['mesh_format']}\n"
+        f"MARKER_HEATFLUX= ( {su2_settings['marker_wall']}, 0.0 )\n"
+        f"MARKER_FAR= ( {su2_settings['marker_far']} )\n"
+        "\n"
+        f"% Proxy reference Reynolds number based on L = {reynolds:.8e}\n"
+        "% If you switch to INC_RANS / transition models later, revisit turbulence settings\n"
+        "% and near-wall mesh requirements before trusting the result.\n"
+    )
+
+
+def _build_case_readme(case_name: str, case_entry: dict, su2_settings: dict) -> str:
+    lines = [
+        f"# {case_name}",
+        "",
+        "這個資料夾是 SU2 shortlist 驗證工作包。",
+        "",
+        "## Included Files",
+        "",
+        "- `gene.json`: 正規化後的基因參數",
+        "- `summary.json` / `summary.md`: 目前 fast proxy 的基準結果",
+        "- `fairing_geometry.csv`: 外形曲線與包絡表格，方便檢查或重建幾何",
+        "- `su2_case.cfg`: SU2 starter config",
+        "- `PUT_MESH_HERE.txt`: mesh 與 marker 命名提醒",
+        "",
+        "## Mesh Contract",
+        "",
+        f"- Mesh filename: `{su2_settings['mesh_filename']}`",
+        f"- Wall marker: `{su2_settings['marker_wall']}`",
+        f"- Far-field marker: `{su2_settings['marker_far']}`",
+        "",
+        "## Proxy Baseline",
+        "",
+        f"- Drag: {case_entry['Drag']:.4f} N",
+        f"- Cd: {case_entry['Cd']:.6f}",
+        f"- Swet: {case_entry['Swet']:.3f} m^2",
+        f"- LaminarFraction: {case_entry['LaminarFraction']:.3f}",
+        f"- ReynoldsNumber(L): {case_entry['ReynoldsNumber']:.6e}",
+        "",
+        "## Next Steps",
+        "",
+        "1. 以這個 case 的外形重建或匯出最終 mesh，存成 `fairing_mesh.su2`。",
+        "2. 確認 mesh markers 名稱與 config 一致。",
+        "3. 在此資料夾執行 `SU2_CFD su2_case.cfg`，或改用 `mpirun -n 4 SU2_CFD su2_case.cfg`。",
+        "4. 把 SU2 的 drag / force 結果回填到你的 shortlist 比較表。",
+        "",
+        "## SU2 References",
+        "",
+        f"- Configuration syntax: {SU2_DOC_LINKS['configuration']}",
+        f"- Incompressible setup: {SU2_DOC_LINKS['physical_definition']}",
+        f"- Example incompressible tutorial: {SU2_DOC_LINKS['incompressible_tutorial']}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _build_manifest_markdown(manifest: dict) -> str:
+    lines = [
+        "# SU2 Shortlist Validation Package",
+        "",
+        f"- GeneratedAt: {manifest['GeneratedAt']}",
+        f"- Backend: {manifest['Backend']}",
+        f"- Preset: {manifest['Preset']}",
+        f"- Cases: {manifest['CaseCount']}",
+        "",
+        "## Cases",
+        "",
+    ]
+
+    for entry in manifest["Cases"]:
+        lines.extend(
+            [
+                f"### {entry['CaseName']}",
+                "",
+                f"- CaseDir: {entry['CaseDir']}",
+                f"- Drag: {entry['Drag']:.4f} N",
+                f"- Cd: {entry['Cd']:.6f}",
+                f"- ReynoldsNumber(L): {entry['ReynoldsNumber']:.6e}",
+                f"- FilledFields: {', '.join(entry['FilledFields']) if entry['FilledFields'] else 'none'}",
+                "",
+            ]
+        )
+
+    lines.extend(
+        [
+            "## Next Steps",
+            "",
+            "1. Mesh each shortlisted case into SU2 `.su2` format.",
+            "2. Keep the wall marker name and far-field marker name consistent with each case config.",
+            "3. Run `./run_all_su2_cases.sh` after SU2 is installed and meshes are ready.",
+            "",
+            "## References",
+            "",
+            f"- SU2 download / macOS binaries: {SU2_DOC_LINKS['download']}",
+            f"- Config reference: {SU2_DOC_LINKS['configuration']}",
+            f"- Incompressible physical definition: {SU2_DOC_LINKS['physical_definition']}",
+            f"- Incompressible example tutorial: {SU2_DOC_LINKS['incompressible_tutorial']}",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _write_root_run_script(output_dir: Path, case_entries: list[dict]) -> Path:
+    lines = [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "",
+        'if ! command -v SU2_CFD >/dev/null 2>&1; then',
+        '  echo "SU2_CFD not found in PATH. Install SU2 first." >&2',
+        "  exit 1",
+        "fi",
+        "",
+        'ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"',
+        "",
+        "for case_dir in \\",
+    ]
+
+    for index, entry in enumerate(case_entries):
+        terminator = " \\" if index < len(case_entries) - 1 else ""
+        lines.append(f'  "$ROOT_DIR/{entry["CaseName"]}"{terminator}')
+
+    lines.extend(
+        [
+            "do",
+            '  mesh_path="$case_dir/fairing_mesh.su2"',
+            '  if [ ! -f "$mesh_path" ]; then',
+            '    echo "Skipping $case_dir (missing fairing_mesh.su2)"',
+            "    continue",
+            "  fi",
+            '  echo "Running $case_dir"',
+            '  (cd "$case_dir" && SU2_CFD su2_case.cfg)',
+            "done",
+            "",
+        ]
+    )
+
+    script_path = output_dir / "run_all_su2_cases.sh"
+    script_path.write_text("\n".join(lines), encoding="utf-8")
+    script_path.chmod(0o755)
+    return script_path
+
+
+def _candidate_to_mapping(candidate) -> Mapping:
+    if not isinstance(candidate, Mapping):
+        raise AnalysisInputError("shortlist candidate 必須是 dict / mapping")
+    return candidate
+
+
+def prepare_shortlist_validation_package(
+    candidates: Iterable[Mapping],
+    *,
+    output_dir: str | Path,
+    backend: str = "su2",
+    flow_conditions: str | Path | dict | None = None,
+    preset: str = "none",
+    fill_missing_from_example: bool = False,
+    su2_settings: Mapping | None = None,
+) -> dict:
+    if backend != "su2":
+        raise ValueError(f"Unsupported high-fidelity backend: {backend}")
+
+    candidate_list = [_candidate_to_mapping(candidate) for candidate in candidates]
+    if not candidate_list:
+        raise AnalysisInputError("shortlist 不可為空")
+
+    normalized_flow = load_flow_conditions(flow_conditions)
+    resolved_settings = dict(DEFAULT_SU2_SETTINGS)
+    if su2_settings:
+        resolved_settings.update(dict(su2_settings))
+
+    root = Path(output_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    used_names: set[str] = set()
+    case_entries: list[dict] = []
+
+    for index, candidate in enumerate(candidate_list, start=1):
+        case_name = _make_unique_case_name(_candidate_name(candidate, index), used_names)
+        gene, gene_metadata = _extract_gene(candidate, fill_missing_from_example=fill_missing_from_example)
+        analysis = analyze_gene(
+            gene,
+            flow_conditions=normalized_flow,
+            preset=preset,
+            backend="fast_proxy",
+            include_geometry=True,
+        )
+
+        case_dir = root / case_name
+        case_dir.mkdir(parents=True, exist_ok=True)
+
+        (case_dir / "gene.json").write_text(
+            json.dumps(gene, indent=2, ensure_ascii=False, default=_json_default) + "\n",
+            encoding="utf-8",
+        )
+        report_files = write_analysis_report_bundle(
+            case_dir,
+            gene,
+            analysis,
+            gene_metadata=gene_metadata,
+        )
+        _write_geometry_table(analysis["Curves"], case_dir / "fairing_geometry.csv")
+        (case_dir / "su2_case.cfg").write_text(
+            _build_su2_config(case_name, gene, normalized_flow, resolved_settings),
+            encoding="utf-8",
+        )
+        (case_dir / "PUT_MESH_HERE.txt").write_text(
+            "\n".join(
+                [
+                    "Place your final SU2 mesh here as `fairing_mesh.su2`.",
+                    f"Required wall marker: {resolved_settings['marker_wall']}",
+                    f"Required far-field marker: {resolved_settings['marker_far']}",
+                    "Then run `SU2_CFD su2_case.cfg` inside this folder.",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        case_entry = {
+            "CaseName": case_name,
+            "CaseDir": str(case_dir),
+            "Drag": float(analysis["Drag"]),
+            "Cd": float(analysis["Cd"]),
+            "Swet": float(analysis["Swet"]),
+            "LaminarFraction": float(analysis["LaminarFraction"]),
+            "ReynoldsNumber": float(_compute_reynolds_number(gene, normalized_flow)),
+            "ReferenceLength": float(gene["L"]),
+            "FilledFields": gene_metadata.get("filled_fields", []),
+            "PreparedFiles": {
+                "gene_json": str(case_dir / "gene.json"),
+                "summary_json": report_files["summary_json"],
+                "summary_md": report_files["summary_md"],
+                "geometry_csv": str(case_dir / "fairing_geometry.csv"),
+                "su2_config": str(case_dir / "su2_case.cfg"),
+                "mesh_placeholder": str(case_dir / "PUT_MESH_HERE.txt"),
+            },
+        }
+        if "GeneFile" in candidate:
+            case_entry["GeneFile"] = str(candidate["GeneFile"])
+        case_entry["Notes"] = dict(candidate.get("Notes", {})) if isinstance(candidate.get("Notes"), Mapping) else candidate.get("Notes")
+        (case_dir / "README.md").write_text(
+            _build_case_readme(case_name, case_entry, resolved_settings),
+            encoding="utf-8",
+        )
+        case_entries.append(case_entry)
+
+    case_entries.sort(key=lambda entry: (entry["Drag"], entry["Cd"], entry["CaseName"]))
+    for rank, entry in enumerate(case_entries, start=1):
+        entry["Rank"] = rank
+
+    run_script = _write_root_run_script(root, case_entries)
+    manifest = {
+        "GeneratedAt": datetime.now().isoformat(),
+        "Backend": backend,
+        "Preset": preset,
+        "CaseCount": len(case_entries),
+        "FlowConditions": normalized_flow,
+        "SU2Settings": resolved_settings,
+        "Cases": case_entries,
+        "RunScript": str(run_script),
+        "Sources": SU2_DOC_LINKS,
+        "Status": "prepared",
+        "ManifestFiles": {
+            "json": str(root / "validation_manifest.json"),
+            "markdown": str(root / "validation_manifest.md"),
+        },
+    }
+
+    manifest_json = root / "validation_manifest.json"
+    manifest_md = root / "validation_manifest.md"
+    manifest_json.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False, default=_json_default) + "\n",
+        encoding="utf-8",
+    )
+    manifest_md.write_text(_build_manifest_markdown(manifest), encoding="utf-8")
+    return manifest
+
+
 def validate_shortlist(
     candidates: Iterable[Mapping],
     *,
     backend: str = "su2",
-) -> None:
-    candidate_count = sum(1 for _ in candidates)
-    if backend != "su2":
-        raise ValueError(f"Unsupported high-fidelity backend: {backend}")
-    raise HighFidelityValidationNotReady(
-        f"SU2 shortlist validation is planned but not implemented yet. Received {candidate_count} candidate(s)."
+    output_dir: str | Path,
+    flow_conditions: str | Path | dict | None = None,
+    preset: str = "none",
+    fill_missing_from_example: bool = False,
+    su2_settings: Mapping | None = None,
+) -> dict:
+    return prepare_shortlist_validation_package(
+        candidates,
+        output_dir=output_dir,
+        backend=backend,
+        flow_conditions=flow_conditions,
+        preset=preset,
+        fill_missing_from_example=fill_missing_from_example,
+        su2_settings=su2_settings,
     )

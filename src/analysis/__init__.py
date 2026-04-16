@@ -16,7 +16,11 @@ from .fairing_analysis import (
     write_analysis_report_bundle,
     write_batch_analysis_summary,
 )
-from .high_fidelity_validator import HighFidelityValidationNotReady, validate_shortlist
+from .high_fidelity_validator import (
+    HighFidelityValidationNotReady,
+    prepare_shortlist_validation_package,
+    validate_shortlist,
+)
 
 __all__ = [
     'AnalysisInputError',
@@ -33,6 +37,7 @@ __all__ = [
     'load_flow_conditions',
     'load_gene_file',
     'prepare_analysis_output_dir',
+    'prepare_shortlist_validation_package',
     'score_analysis_result',
     'validate_shortlist',
     'write_analysis_report_bundle',

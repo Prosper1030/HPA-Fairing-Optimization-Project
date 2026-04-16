@@ -1,0 +1,126 @@
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+SRC_ROOT = os.path.join(PROJECT_ROOT, "src")
+SCRIPTS_ROOT = os.path.join(PROJECT_ROOT, "scripts")
+
+sys.path.insert(0, SRC_ROOT)
+
+from analysis import get_example_gene, prepare_shortlist_validation_package
+
+
+class TestHighFidelityValidator(unittest.TestCase):
+    def setUp(self):
+        self.example_gene = get_example_gene()
+
+    def test_prepare_shortlist_validation_package_creates_su2_bundle(self):
+        partial_gene = {
+            "L": 2.45,
+            "W_max": 0.57,
+            "X_max_pos": 0.38,
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest = prepare_shortlist_validation_package(
+                [
+                    {"name": "alpha", "gene": self.example_gene},
+                    {"name": "beta", "gene": partial_gene},
+                ],
+                output_dir=temp_dir,
+                fill_missing_from_example=True,
+            )
+
+            self.assertEqual(manifest["Status"], "prepared")
+            self.assertEqual(manifest["CaseCount"], 2)
+            self.assertTrue(os.path.exists(manifest["ManifestFiles"]["json"]))
+            self.assertTrue(os.path.exists(manifest["ManifestFiles"]["markdown"]))
+            self.assertTrue(os.path.exists(manifest["RunScript"]))
+
+            with open(manifest["ManifestFiles"]["json"], "r", encoding="utf-8") as handle:
+                saved_manifest = json.load(handle)
+
+            self.assertIn("ManifestFiles", saved_manifest)
+            self.assertEqual(saved_manifest["CaseCount"], 2)
+
+            case_entry = saved_manifest["Cases"][0]
+            case_dir = case_entry["CaseDir"]
+            self.assertTrue(os.path.exists(os.path.join(case_dir, "gene.json")))
+            self.assertTrue(os.path.exists(os.path.join(case_dir, "summary.json")))
+            self.assertTrue(os.path.exists(os.path.join(case_dir, "summary.md")))
+            self.assertTrue(os.path.exists(os.path.join(case_dir, "fairing_geometry.csv")))
+            self.assertTrue(os.path.exists(os.path.join(case_dir, "su2_case.cfg")))
+            self.assertTrue(os.path.exists(os.path.join(case_dir, "README.md")))
+            self.assertTrue(os.path.exists(os.path.join(case_dir, "PUT_MESH_HERE.txt")))
+
+            with open(os.path.join(case_dir, "su2_case.cfg"), "r", encoding="utf-8") as handle:
+                config_text = handle.read()
+            self.assertIn("SOLVER= INC_NAVIER_STOKES", config_text)
+            self.assertIn("MARKER_FAR= ( farfield )", config_text)
+
+            beta_entry = next(entry for entry in saved_manifest["Cases"] if entry["CaseName"] == "beta")
+            self.assertIn("H_top_max", beta_entry["FilledFields"])
+
+    def test_cli_can_prepare_shortlist_from_batch_summary(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            gene_dir = os.path.join(temp_dir, "genes")
+            output_dir = os.path.join(temp_dir, "su2_shortlist")
+            os.makedirs(gene_dir, exist_ok=True)
+
+            gene_a_path = os.path.join(gene_dir, "gene_a.json")
+            gene_b_path = os.path.join(gene_dir, "gene_b.json")
+            with open(gene_a_path, "w", encoding="utf-8") as handle:
+                json.dump(self.example_gene, handle)
+            with open(gene_b_path, "w", encoding="utf-8") as handle:
+                json.dump({"L": 2.4, "W_max": 0.56, "X_max_pos": 0.41}, handle)
+
+            batch_summary_path = os.path.join(temp_dir, "batch_summary.json")
+            with open(batch_summary_path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "RankedCases": [
+                            {"Rank": 1, "CaseName": "gene_a", "GeneFile": gene_a_path, "Drag": 1.0, "Cd": 0.12},
+                            {"Rank": 2, "CaseName": "gene_b", "GeneFile": gene_b_path, "Drag": 1.1, "Cd": 0.13},
+                        ]
+                    },
+                    handle,
+                    indent=2,
+                    ensure_ascii=False,
+                )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    os.path.join(SCRIPTS_ROOT, "prepare_su2_shortlist.py"),
+                    "--batch-summary",
+                    batch_summary_path,
+                    "--top",
+                    "1",
+                    "--out",
+                    output_dir,
+                    "--fill-missing-from-example",
+                ],
+                capture_output=True,
+                text=True,
+                cwd=PROJECT_ROOT,
+            )
+
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+            self.assertIn("SU2 shortlist 工作包準備完成", proc.stdout)
+            self.assertTrue(os.path.exists(os.path.join(output_dir, "validation_manifest.json")))
+            self.assertTrue(os.path.exists(os.path.join(output_dir, "run_all_su2_cases.sh")))
+
+            with open(os.path.join(output_dir, "validation_manifest.json"), "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+
+            self.assertEqual(payload["CaseCount"], 1)
+            self.assertEqual(payload["Cases"][0]["CaseName"], "gene_a")
+
+
+if __name__ == "__main__":
+    unittest.main()
