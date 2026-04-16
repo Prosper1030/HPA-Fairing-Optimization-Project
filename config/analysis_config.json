@@ -1,0 +1,11 @@
+{
+  "backend": "fast_proxy",
+  "preset": "none",
+  "report": {
+    "output_root": "output/analysis",
+    "write_summary_json": true,
+    "write_summary_markdown": true,
+    "plot_side_profile": true,
+    "plot_drag_breakdown": true
+  }
+}

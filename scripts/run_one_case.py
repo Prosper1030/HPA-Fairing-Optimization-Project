@@ -25,7 +25,7 @@ from optimization.hpa_asymmetric_optimizer import (
     CST_Modeler, VSPModelGenerator, ConstraintChecker
 )
 from analysis.drag_analysis import DragAnalyzer
-from analysis.fairing_drag_proxy import FairingDragProxy
+from analysis.fairing_analysis import analyze_gene, score_analysis_result
 
 
 def evaluate_gene(
@@ -84,18 +84,22 @@ def evaluate_gene(
             return finalize_result(score=1e6, valid=False, extra={"ConstraintResults": results})
 
         if analysis_mode == "proxy":
-            analyzer = FairingDragProxy(velocity=velocity, rho=rho, mu=mu, s_ref=1.0)
-            result = analyzer.evaluate_curves(curves)
+            result = analyze_gene(
+                gene,
+                flow_conditions=flow_conditions,
+                preset="hpa",
+                backend="fast_proxy",
+            )
+            scored = score_analysis_result(result, W_area_penalty)
 
-            drag = result["Drag"]
-            swet = result["Swet"]
-            cd = result["Cd"]
-            cda = result.get("CdA", cd)
-            area_penalty = W_area_penalty * swet
-            score = drag + area_penalty
+            drag = scored["Drag"]
+            swet = scored["Swet"]
+            cd = scored["Cd"]
+            cda = scored.get("CdA", cd)
+            score = scored["Score"]
             print(
                 f"{name}: [proxy] Cd={cd:.6f}, Swet={swet:.3f}m², "
-                f"Drag={drag:.4f}N, Lam={result['LaminarFraction']:.2f}, "
+                f"Drag={drag:.4f}N, Lam={scored['LaminarFraction']:.2f}, "
                 f"Score={score:.4f}N",
                 file=sys.stderr,
             )
@@ -105,7 +109,7 @@ def evaluate_gene(
                 swet=swet,
                 cd=cd,
                 cda=cda,
-                extra=result,
+                extra=scored,
             )
 
         # 3. 生成 VSP 模型（直接保留在記憶體中）
