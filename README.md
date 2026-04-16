@@ -77,6 +77,14 @@ python scripts/analyze_fairing.py --write-example-gene example_gene.json
 python scripts/analyze_fairing.py --show-required-fields
 ```
 
+如果你的 gene 只想覆蓋少數欄位，也可以讓工具自動用範例值補齊其餘欄位：
+
+```bash
+python scripts/analyze_fairing.py \
+  --gene partial_gene.json \
+  --fill-missing-from-example
+```
+
 ### 3. 執行單一設計分析
 
 ```bash
@@ -119,6 +127,15 @@ batch 模式會：
 - 每個案例都產生自己的 `summary.json` / `summary.md` / 圖檔
 - 在根目錄另外產生 `batch_summary.json` 與 `batch_summary.md`
 - 依 `Drag` 由小到大做排名，方便快速比較候選外形
+
+如果 batch 目錄裡有些 gene 只寫了部分欄位，也可以一起補齊：
+
+```bash
+python scripts/analyze_fairing.py \
+  --gene-dir path/to/gene_directory \
+  --fill-missing-from-example \
+  --out output/analysis/batch_demo
+```
 
 ## 分析結果內容
 
