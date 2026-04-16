@@ -18,9 +18,10 @@ import os
 import json
 import argparse
 
-# 添加專案路徑
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.insert(0, os.path.join(project_root, 'src'))
+from _bootstrap import ensure_src_path
+
+
+ensure_src_path()
 
 from analysis.design_evaluator import evaluate_design_gene
 

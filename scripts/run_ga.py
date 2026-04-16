@@ -23,9 +23,10 @@ from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-# 添加專案路徑
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.insert(0, os.path.join(project_root, 'src'))
+from _bootstrap import ensure_src_path
+
+
+project_root = os.fspath(ensure_src_path())
 
 # 導入優化器模組
 from optimization.hpa_asymmetric_optimizer import (

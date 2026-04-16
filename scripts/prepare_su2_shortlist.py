@@ -14,9 +14,10 @@ import os
 from pathlib import Path
 import sys
 
+from _bootstrap import ensure_src_path
 
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, os.path.join(project_root, "src"))
+
+project_root = os.fspath(ensure_src_path())
 
 from analysis import (
     AnalysisInputError,
