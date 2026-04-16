@@ -7,6 +7,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "scripts"))
 
+from analysis.design_evaluator import evaluate_design_gene
 from analysis.fairing_drag_proxy import FairingDragProxy
 from optimization.hpa_asymmetric_optimizer import CST_Modeler
 from run_one_case import evaluate_gene
@@ -64,6 +65,26 @@ class TestDragProxyMetrics(unittest.TestCase):
         self.assertTrue(result["Valid"])
         self.assertIn("LaminarFraction", result)
         self.assertAlmostEqual(result["Score"], result["Drag"] + 0.1 * result["Swet"], places=6)
+
+    def test_run_one_case_wrapper_matches_shared_evaluator(self):
+        wrapped = evaluate_gene(
+            self.base_gene,
+            "proxy_wrapper_test",
+            W_area_penalty=0.1,
+            analysis_mode="proxy",
+            return_details=True,
+        )
+        shared = evaluate_design_gene(
+            self.base_gene,
+            "proxy_wrapper_test",
+            area_penalty=0.1,
+            analysis_mode="proxy",
+            return_details=True,
+        )
+
+        self.assertAlmostEqual(wrapped["Score"], shared["Score"], places=8)
+        self.assertAlmostEqual(wrapped["Drag"], shared["Drag"], places=8)
+        self.assertAlmostEqual(wrapped["Cd"], shared["Cd"], places=8)
 
 
 if __name__ == "__main__":

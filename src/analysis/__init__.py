@@ -1,4 +1,5 @@
 from .drag_analysis import DragAnalyzer
+from .design_evaluator import evaluate_design_gene
 from .fairing_drag_proxy import FairingDragProxy
 from .fairing_analysis import (
     AnalysisInputError,
@@ -23,6 +24,7 @@ __all__ = [
     'FairingDragProxy',
     'HighFidelityValidationNotReady',
     'analyze_gene',
+    'evaluate_design_gene',
     'format_required_gene_fields',
     'get_example_gene',
     'get_gene_field_bounds',

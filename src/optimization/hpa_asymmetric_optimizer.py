@@ -24,7 +24,7 @@ if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
 from analysis.drag_analysis import DragAnalyzer
-from analysis.fairing_analysis import analyze_gene, score_analysis_result
+from analysis.design_evaluator import evaluate_design_gene
 from utils.openvsp_loader import load_openvsp
 
 # 導入數學工具（來自 src/math/）
@@ -833,88 +833,23 @@ class HPA_Optimizer:
         # 轉換為基因字典
         gene = self.array_to_gene(gene_array)
 
-        # 1. 生成幾何曲線
-        curves = CST_Modeler.generate_asymmetric_fairing(gene)
-
-        # 2. 檢查限制
-        passed, results = ConstraintChecker.check_all_constraints(gene, curves)
-
-        if not passed:
-            # 限制失敗，返回懲罰值
-            return 1e6
-
         name = f"gen{gen:03d}_ind{ind:03d}"
-
-        if self.analysis_mode == "proxy":
-            try:
-                result = analyze_gene(
-                    gene,
-                    flow_conditions={
-                        "velocity": self.velocity,
-                        "rho": self.rho,
-                        "mu": self.mu,
-                    },
-                    preset="hpa",
-                    backend="fast_proxy",
-                )
-                scored = score_analysis_result(result, self.W_area_penalty)
-                drag = scored["Drag"]
-                swet = scored.get("Swet")
-                cd = scored["Cd"]
-                score = scored["Score"]
-                self.pm.log(
-                    f"{name}: [proxy] Cd={cd:.6f}, Swet={swet:.3f}m², "
-                    f"Drag={drag:.4f}N, Lam={scored['LaminarFraction']:.2f}, "
-                    f"Score={score:.4f}N"
-                )
-                return score
-            except Exception as e:
-                self.pm.log(f"Proxy 阻力計算失敗 ({name}): {e}")
-                import traceback
-                self.pm.log(traceback.format_exc())
-                return 1e6
-
-        # 3. 生成 VSP 模型（GA 熱路徑只保留在記憶體中）
-        try:
-            VSPModelGenerator.create_fuselage(curves, name, filepath=None)
-        except Exception as e:
-            self.pm.log(f"VSP 生成失敗 ({name}): {e}")
-            return 1e6
-
-        # 4. 計算阻力（直接分析當前記憶體中的 OpenVSP 模型）
-        try:
-            result = self.drag_analyzer.run_analysis_current_model(
+        return float(
+            evaluate_design_gene(
+                gene,
                 name,
-                velocity=self.velocity,
-                rho=self.rho,
-                mu=self.mu,
+                area_penalty=self.W_area_penalty,
+                analysis_mode=self.analysis_mode,
+                flow_conditions={
+                    "velocity": self.velocity,
+                    "rho": self.rho,
+                    "mu": self.mu,
+                },
+                logger=self.pm.log,
+                drag_analyzer=self.drag_analyzer,
+                emit_traceback=True,
             )
-            if not result:
-                self.pm.log(f"阻力計算失敗 ({name}): 無法取得 ParasiteDrag 結果")
-                return 1e6
-
-            drag = result["Drag"]
-            swet = result.get("Swet")
-            cd = result["Cd"]
-
-            if swet is not None:
-                area_penalty = self.W_area_penalty * swet
-                score = drag + area_penalty
-                self.pm.log(
-                    f"{name}: Cd={cd:.6f}, Swet={swet:.3f}m², "
-                    f"Drag={drag:.4f}N, Penalty={area_penalty:.4f}N, "
-                    f"Score={score:.4f}N"
-                )
-                return score
-
-            self.pm.log(f"{name}: Cd={cd:.6f}, Drag={drag:.4f}N (無Swet)")
-            return drag
-
-        except Exception as e:
-            self.pm.log(f"阻力計算失敗 ({name}): {e}")
-            import traceback
-            self.pm.log(traceback.format_exc())
-            return 1e6
+        )
 
     def gene_to_array(self, gene: Dict) -> np.ndarray:
         """基因字典轉陣列"""

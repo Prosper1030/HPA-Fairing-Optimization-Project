@@ -5,7 +5,8 @@ HPA 整流罩單一個體評估腳本（獨立進程）
 每次執行都是全新的進程，避免 OpenVSP DLL 衝突。
 
 使用方法：
-    python run_one_case.py --gene '{"L": 2.5, ...}' --name gen000_ind000 --output_dir /path/to/dir
+    python run_one_case.py --gene '{"L": 2.5, ...}' --name gen000_ind000
+    python run_one_case.py --gene path/to/gene.json --analysis-mode proxy
 
 輸出（stdout）：
     成功: "SCORE:1.5283"
@@ -21,11 +22,7 @@ import argparse
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.join(project_root, 'src'))
 
-from optimization.hpa_asymmetric_optimizer import (
-    CST_Modeler, VSPModelGenerator, ConstraintChecker
-)
-from analysis.drag_analysis import DragAnalyzer
-from analysis.fairing_analysis import analyze_gene, score_analysis_result
+from analysis.design_evaluator import evaluate_design_gene
 
 
 def evaluate_gene(
@@ -37,129 +34,21 @@ def evaluate_gene(
     return_details: bool = False,
 ) -> float | dict:
     """
-    評估單一基因組
+    評估單一基因組。
 
     Returns:
         score (float): 適應度分數，越小越好
         或在 return_details=True 時返回詳細結果字典
     """
-    flow_conditions = flow_conditions or {}
-    velocity = float(flow_conditions.get("velocity", 6.5))
-    rho = float(flow_conditions.get("rho", 1.225))
-    mu = float(flow_conditions.get("mu", 1.7894e-5))
-
-    def finalize_result(
-        *,
-        score: float,
-        drag: float | None = None,
-        swet: float | None = None,
-        cd: float | None = None,
-        cda: float | None = None,
-        valid: bool = True,
-        extra: dict | None = None,
-    ) -> float | dict:
-        if not return_details:
-            return float(score)
-
-        payload = {
-            "Score": float(score),
-            "Drag": None if drag is None else float(drag),
-            "Swet": None if swet is None else float(swet),
-            "Cd": None if cd is None else float(cd),
-            "CdA": None if cda is None else float(cda),
-            "Valid": bool(valid),
-            "AnalysisMode": analysis_mode,
-        }
-        if extra:
-            payload.update(extra)
-        return payload
-
-    try:
-        # 1. 生成幾何曲線
-        curves = CST_Modeler.generate_asymmetric_fairing(gene)
-
-        # 2. 檢查限制（快速篩選）
-        passed, results = ConstraintChecker.check_all_constraints(gene, curves)
-        if not passed:
-            return finalize_result(score=1e6, valid=False, extra={"ConstraintResults": results})
-
-        if analysis_mode == "proxy":
-            result = analyze_gene(
-                gene,
-                flow_conditions=flow_conditions,
-                preset="hpa",
-                backend="fast_proxy",
-            )
-            scored = score_analysis_result(result, W_area_penalty)
-
-            drag = scored["Drag"]
-            swet = scored["Swet"]
-            cd = scored["Cd"]
-            cda = scored.get("CdA", cd)
-            score = scored["Score"]
-            print(
-                f"{name}: [proxy] Cd={cd:.6f}, Swet={swet:.3f}m², "
-                f"Drag={drag:.4f}N, Lam={scored['LaminarFraction']:.2f}, "
-                f"Score={score:.4f}N",
-                file=sys.stderr,
-            )
-            return finalize_result(
-                score=score,
-                drag=drag,
-                swet=swet,
-                cd=cd,
-                cda=cda,
-                extra=scored,
-            )
-
-        # 3. 生成 VSP 模型（直接保留在記憶體中）
-        try:
-            VSPModelGenerator.create_fuselage(curves, name, filepath=None)
-        except Exception as e:
-            print(f"VSP生成失敗: {e}", file=sys.stderr)
-            return finalize_result(score=1e6, valid=False, extra={"Error": str(e)})
-
-        # 4. 計算阻力（直接分析當前記憶體中的 OpenVSP 模型）
-        try:
-            analyzer = DragAnalyzer()
-            result = analyzer.run_analysis_current_model(name, velocity=velocity, rho=rho, mu=mu)
-            if not result:
-                print(f"{name}: 分析失敗", file=sys.stderr)
-                return finalize_result(score=1e6, valid=False, extra={"Error": "analysis_failed"})
-
-            drag = result["Drag"]
-            swet = result.get("Swet")
-            cd = result["Cd"]
-            cda = result.get("CdA", cd)
-
-            if swet is not None:
-                area_penalty = W_area_penalty * swet
-                score = drag + area_penalty
-                print(
-                    f"{name}: Cd={cd:.6f}, Swet={swet:.3f}m², "
-                    f"Drag={drag:.4f}N, Penalty={area_penalty:.4f}N, "
-                    f"Score={score:.4f}N",
-                    file=sys.stderr,
-                )
-                return finalize_result(
-                    score=score,
-                    drag=drag,
-                    swet=swet,
-                    cd=cd,
-                    cda=cda,
-                    extra=result,
-                )
-
-            print(f"{name}: Cd={cd:.6f}, Drag={drag:.4f}N (無Swet)", file=sys.stderr)
-            return finalize_result(score=drag, drag=drag, cd=cd, cda=cda, extra=result)
-
-        except Exception as e:
-            print(f"{name}: 阻力計算失敗 - {e}", file=sys.stderr)
-            return finalize_result(score=1e6, valid=False, extra={"Error": str(e)})
-
-    except Exception as e:
-        print(f"Worker錯誤: {e}", file=sys.stderr)
-        return finalize_result(score=1e6, valid=False, extra={"Error": str(e)})
+    return evaluate_design_gene(
+        gene,
+        name,
+        area_penalty=W_area_penalty,
+        analysis_mode=analysis_mode,
+        flow_conditions=flow_conditions,
+        return_details=return_details,
+        logger=lambda message: print(message, file=sys.stderr),
+    )
 
 
 def main():
