@@ -1,30 +1,30 @@
 # HPA Fairing Optimization Project
 
-Project Name: HPA Fairing Optimization Project
+**低速整流罩快速分析工具，支援後續接 GA 與高保真驗證**
 
-**人力飛機整流罩 GA 優化系統**
+本專案目前的主線已從「OpenVSP 驅動的 GA 優化」調整為「快速代理分析為主，GA 與高保真驗證為延伸能力」。
 
-成大航太 × 日本鳥人間大賽專用
+現在最主要的 user-facing 入口是：
 
----
+```bash
+python scripts/analyze_fairing.py --gene <gene.json>
+```
 
-## 專案簡介
+它會使用目前的 `fast_proxy` 阻力代理模型，直接輸出一組可閱讀的分析報告，而不是只回傳單一數字。
 
-本專案使用 **CST (Class Shape Transformation)** 參數化方法與 **OpenVSP** 空氣動力分析工具，配合 **遺傳演算法 (GA)** 自動優化人力飛機整流罩設計。
+## 專案定位
 
-### 核心特色
-
-- **20 個基因參數**：完整控制整流罩幾何
-- **上下非對稱截面**：M/N 指數可分開設定
-- **CST 曲線**：峰值歸一化確保精確尺寸
-- **自動 GA 優化**：收斂曲線、最佳模型自動生成
-- **硬約束檢查**：座艙空間、踏板寬度等
-
----
+- 主用途：分析低速整流罩外形的阻力特性與改善方向
+- 正式主路徑：`fast_proxy`
+- 可選 preset：
+  - `none`：純低速整流罩空力分析
+  - `hpa`：加入目前 HPA 專案使用的座艙 / 踏板 / 肩膀 / 尾長限制
+- OpenVSP：保留為 legacy / benchmark / fallback 開發工具，不再是主分析方案
+- SU2：規劃作為最終 shortlist 驗證工具，目前只保留介面，不進日常分析流程
 
 ## 快速開始
 
-### 0. 建立環境
+### 1. 建立環境
 
 macOS / Linux：
 
@@ -40,89 +40,130 @@ Windows PowerShell：
 
 詳細的 macOS 安裝流程請見 `docs/MAC_SETUP.md`。
 
-### 1. 運行 GA 優化
+### 2. 準備 gene JSON
+
+分析工具目前只支援現有的 CST / gene 參數化輸入。gene 檔案必須包含以下 20 個欄位：
+
+- `L`
+- `W_max`
+- `H_top_max`
+- `H_bot_max`
+- `N1`
+- `N2_top`
+- `N2_bot`
+- `X_max_pos`
+- `X_offset`
+- `M_top`
+- `N_top`
+- `M_bot`
+- `N_bot`
+- `tail_rise`
+- `blend_start`
+- `blend_power`
+- `w0`
+- `w1`
+- `w2`
+- `w3`
+
+### 3. 執行單一設計分析
 
 ```bash
-# 使用預設配置（50代，20族群）
+# 純低速整流罩分析
+python scripts/analyze_fairing.py --gene path/to/gene.json
+
+# 套用 HPA 幾何限制檢查
+python scripts/analyze_fairing.py --gene path/to/gene.json --preset hpa
+
+# 指定流場與輸出目錄
+python scripts/analyze_fairing.py \
+  --gene path/to/gene.json \
+  --flow config/fluid_conditions.json \
+  --out output/analysis/demo_case \
+  --preset none
+```
+
+### 4. 查看報告輸出
+
+每次分析都會產出一組 report bundle：
+
+- `summary.json`：完整機器可讀結果
+- `summary.md`：人可直接閱讀的摘要
+- `side_profile.png`：外形側視圖
+- `drag_breakdown.png`：黏滯阻力 / 壓力阻力拆解
+
+## 分析結果內容
+
+分析核心會固定輸出以下欄位：
+
+- `Drag`
+- `Cd`
+- `Cd_viscous`
+- `Cd_pressure`
+- `Swet`
+- `LaminarFraction`
+- `XPeakAreaFrac`
+- `TailAngles`
+- `Quality`
+- `Recommendations`
+- `ConstraintReport`
+- `PresetUsed`
+- `Backend`
+
+`Recommendations` 會直接給自然語句，例如：
+
+- 把最大截面往前移一些
+- 放緩下尾收縮
+- 減少濕面積
+- 優先改善尾段平滑度
+
+## GA 優化
+
+GA 仍然保留，而且現在預設走 `proxy` 路徑，不再依賴 OpenVSP 才能正常跑完整流程。
+
+```bash
+# 使用 config/ga_config.json 的預設值
 python scripts/run_ga.py
 
-# 自訂參數
-python scripts/run_ga.py --gen 100 --pop 30
+# 自訂世代與族群
+python scripts/run_ga.py --gen 50 --pop 20
 
-# 使用配置檔案
-python scripts/run_ga.py --config config/ga_config.json
+# 明確指定 analysis mode
+python scripts/run_ga.py --analysis-mode proxy
 ```
 
-### 2. 測試單一設計
+GA 的預設行為：
+
+- 適應度主路徑使用 `proxy`
+- 保存 `best_gene.json`
+- 另外保存 `results.json`，包含最佳解的純空力摘要
+- 最終 `.vsp3` 匯出預設關閉
+
+如果你真的需要最佳解的 `.vsp3`：
 
 ```bash
-python tests/test_expanded_parameters.py
+python scripts/run_ga.py --final-vsp
 ```
 
-### 3. 查看結果
+## 設定檔
 
-輸出位於 `output/hpa_run_YYYYMMDD_HHMMSS/`：
+### `config/analysis_config.json`
 
-- `vsp_models/best_design.vsp3` - 最佳模型（用 VSP GUI 開啟）
-- `logs/convergence.png` - 收斂曲線
-- `logs/best_gene.json` - 最佳基因參數
+分析工具預設設定：
 
----
+- 預設 backend：`fast_proxy`
+- 預設 preset：`none`
+- 報告輸出開關
 
-## 基因參數定義（20 個）
+### `config/ga_config.json`
 
-| 類別         | 參數        | 範圍        | 說明                   |
-| ------------ | ----------- | ----------- | ---------------------- |
-| **幾何**     | L           | 1.8-3.0 m   | 整流罩總長             |
-|              | W_max       | 0.48-0.65 m | 最大全寬               |
-|              | H_top_max   | 0.85-1.15 m | 上半部高度             |
-|              | H_bot_max   | 0.25-0.50 m | 下半部高度             |
-| **CST 形狀** | N1          | 0.4-0.9     | Class function（共用） |
-|              | N2_top      | 0.5-1.0     | 上曲線 Shape function  |
-|              | N2_bot      | 0.5-1.0     | 下曲線 Shape function  |
-| **位置**     | X_max_pos   | 0.2-0.5     | 最大寬度位置           |
-|              | X_offset    | 0.5-1.0 m   | 收縮開始位置           |
-| **超橢圓**   | M_top       | 2.0-4.0     | 上半部 M 指數          |
-|              | N_top       | 2.0-4.0     | 上半部 N 指數          |
-|              | M_bot       | 2.0-4.0     | 下半部 M 指數          |
-|              | N_bot       | 2.0-4.0     | 下半部 N 指數          |
-| **尾部**     | tail_rise   | 0.05-0.20 m | 機尾上升高度           |
-|              | blend_start | 0.65-0.85   | 混合開始位置           |
-|              | blend_power | 1.5-3.0     | 混合曲線冪次           |
-| **CST 權重** | w0          | 0.15-0.35   | 前段斜率               |
-|              | w1          | 0.25-0.45   | 最大值附近             |
-|              | w2          | 0.20-0.40   | 後段平滑               |
-|              | w3          | 0.05-0.20   | 尾部收斂               |
+GA 設定保留給優化流程使用，目前預設：
 
----
+- `fitness.analysis_mode = "proxy"`
+- `output.export_final_vsp = false`
 
-## 專案結構
+### `config/fluid_conditions.json`
 
-```
-Fairing Design/
-├── config/                   # 配置檔案
-│   ├── fluid_conditions.json # 流體條件
-│   └── ga_config.json        # GA 優化配置
-├── src/                      # 核心模組
-│   ├── optimization/         # 優化器
-│   │   └── hpa_asymmetric_optimizer.py  # 主優化器
-│   ├── analysis/             # 阻力分析
-│   └── math/                 # 數學工具
-├── scripts/                  # 可執行腳本
-│   └── run_ga.py             # GA 運行腳本
-├── tests/                    # 測試代碼
-├── output/                   # 輸出結果
-├── docs/                     # 文檔（含 macOS 安裝說明）
-├── requirements.txt          # Python 依賴
-├── activate_env.sh           # macOS/Linux 環境啟動腳本
-└── archive/                  # 舊代碼備份
-```
-
----
-
-## 配置說明
-
-### 流體條件 (`config/fluid_conditions.json`)
+流場條件可供分析工具與 GA 共用，例如：
 
 ```json
 {
@@ -134,97 +175,107 @@ Fairing Design/
 }
 ```
 
-### GA 配置 (`config/ga_config.json`)
+## HPA Preset
 
-```json
-{
-  "ga_settings": {
-    "population_size": 20,
-    "n_generations": 50,
-    "crossover_probability": 0.9,
-    "seed": 42
-  }
-}
+`--preset hpa` 會額外檢查目前 HPA 專案使用的硬限制：
+
+- 車架包覆
+- 踏板寬度
+- 肩膀寬度
+- 肩膀上高
+- 肩膀下高
+- 機尾長度
+
+`--preset none` 則只做純空力分析，不帶 HPA 專案特定限制。
+
+## OpenVSP 與高保真驗證
+
+### OpenVSP
+
+OpenVSP 現在的定位是：
+
+- 開發者用 benchmark / compare tool
+- 舊流程相容
+- 特定情況下的 fallback
+
+它不再是主要 user-facing 分析方案，也不是推薦的日常工作流。
+
+### SU2
+
+專案已預留 `src/analysis/high_fidelity_validator.py` 作為高保真驗證入口，規劃方向是：
+
+- 只對 shortlist 候選做驗證
+- 不進每代 GA 內圈
+- 不在 v1 直接整合求解器
+
+## 專案結構
+
+```text
+HPA-Fairing-Optimization-Project/
+├── config/
+│   ├── analysis_config.json
+│   ├── fluid_conditions.json
+│   └── ga_config.json
+├── scripts/
+│   ├── analyze_fairing.py
+│   ├── run_ga.py
+│   └── run_one_case.py
+├── src/
+│   ├── analysis/
+│   │   ├── fairing_analysis.py
+│   │   ├── fairing_drag_proxy.py
+│   │   ├── drag_analysis.py
+│   │   └── high_fidelity_validator.py
+│   ├── optimization/
+│   │   └── hpa_asymmetric_optimizer.py
+│   └── math/
+├── tests/
+└── docs/
 ```
-
----
-
-## 硬約束條件
-
-| 約束     | 值     | 說明                |
-| -------- | ------ | ------------------- |
-| 車架包覆 | 0.3 m  | X_offset >= 0.3     |
-| 踏板寬度 | 0.45 m | 踏板處全寬 >= 0.45  |
-| 肩膀寬度 | 0.52 m | 肩膀處全寬 >= 0.52  |
-| 肩膀上高 | 0.75 m | 肩膀處上高 >= 0.75  |
-| 肩膀下高 | 0.25 m | 肩膀處下高 >= 0.25  |
-| 機尾長度 | 1.5 m  | L - X_offset >= 1.5 |
-
----
 
 ## 環境需求
 
-- **Python**: 3.11.0（虛擬環境 `vsp_env/`）
-- **OpenVSP**: 3.42.3
-- **requirements.txt**: `numpy`, `scipy`, `pymoo`, `matplotlib`
+- Python 3.11
+- `numpy`
+- `scipy`
+- `matplotlib`
+- `pymoo`：只在執行 GA 時需要
+- OpenVSP：只在 legacy compare / `.vsp3` 匯出 / 舊流程時需要
 
-### 安裝依賴
+安裝依賴：
 
 ```bash
 python -m pip install -r requirements.txt
 ```
 
-### OpenVSP 說明
+## 開發與測試
 
-- 專案內的 Python 程式都維持 `import openvsp as vsp`
-- `openvsp` 不包含在 `requirements.txt` 內
-- macOS 上請先安裝 OpenVSP.app，再用 `source activate_env.sh` 讓腳本自動補上 `PYTHONPATH`
-- 若 OpenVSP 發行版的 Python wrapper 與你的 Python 版本不相容，需改用相容版本或自行編譯 OpenVSP Python API
+常用測試：
+
+```bash
+python3 -m unittest \
+  tests.test_fairing_analysis \
+  tests.test_drag_proxy_metrics \
+  tests.test_geometry_peak_position \
+  tests.test_run_ga_proxy
+```
+
+legacy compare benchmark 為 opt-in，只在本機具備 OpenVSP 時建議執行：
+
+```bash
+python tests/experimental/benchmark_proxy_vs_vsp.py --samples 4 --seed 42
+```
+
+## 版本方向
+
+目前建議的開發路線：
+
+1. 先把 `fast_proxy + CLI + report` 做穩
+2. 再把 GA 視為批次搜尋工具接上同一套分析核心
+3. 最後只對少數候選接入 SU2 類高保真驗證
 
 ---
 
-## 開發指南
-
-### 修改基因範圍
-
-編輯 `src/optimization/hpa_asymmetric_optimizer.py` 中的 `GENE_BOUNDS`：
-
-```python
-GENE_BOUNDS = {
-    'L': (1.8, 3.0),
-    'W_max': (0.48, 0.65),
-    # ...
-}
-```
-
-### 添加新約束
-
-編輯 `ConstraintChecker` 類中的 `check_all_constraints()` 方法。
-
-### 修改適應度函數
-
-編輯 `HPA_Optimizer.evaluate_individual()` 方法。
-
----
-
-## Git 提交記錄
-
-```
-b0d26ab feat: 擴展基因參數從9個到20個
-72e3958 feat: 建立GA架構和配置系統
-```
-
----
-
-## 授權與引用
-
-**教育研究用途** - 成功大學航太工程學系
-
-```
-NCKU Aerospace - HPA Fairing Optimization Project (2026)
-```
-
----
-
-**最後更新**: 2026-01-07
-**版本**: 4.0 (GA-Ready with 20 Parameters)
+**用途**：教育研究 / 低速整流罩設計探索
+**單位**：成功大學航太工程學系
+**最後更新**：2026-04-17
