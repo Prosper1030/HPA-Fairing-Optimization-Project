@@ -135,12 +135,24 @@ def format_required_gene_fields() -> str:
     return "\n".join(lines)
 
 
-def normalize_gene(gene: dict) -> dict:
+def normalize_gene(
+    gene: dict,
+    *,
+    fallback_gene: dict | None = None,
+    return_metadata: bool = False,
+) -> dict | tuple[dict, dict]:
     if not isinstance(gene, dict):
         raise AnalysisInputError("gene 必須是 JSON 物件")
 
     normalized = dict(gene)
     _, _, optimizer_cls = _optimizer_dependencies()
+    fallback = dict(fallback_gene or {})
+    filled_fields: list[str] = []
+    for key in optimizer_cls.GENE_BOUNDS:
+        if key not in normalized and key in fallback:
+            normalized[key] = fallback[key]
+            filled_fields.append(key)
+
     missing = [key for key in optimizer_cls.GENE_BOUNDS if key not in normalized]
     if missing:
         raise AnalysisInputError(f"gene 缺少必要欄位: {', '.join(missing)}")
@@ -151,10 +163,18 @@ def normalize_gene(gene: dict) -> dict:
         except (TypeError, ValueError) as exc:
             raise AnalysisInputError(f"gene 欄位 {key} 必須是數值") from exc
 
+    if return_metadata:
+        return normalized, {"filled_fields": filled_fields}
+
     return normalized
 
 
-def load_gene_file(gene_path: str | Path) -> dict:
+def load_gene_file(
+    gene_path: str | Path,
+    *,
+    fill_missing_from_example: bool = False,
+    return_metadata: bool = False,
+) -> dict | tuple[dict, dict]:
     path = Path(gene_path)
     if not path.exists():
         raise AnalysisInputError(f"找不到 gene 檔案: {path}")
@@ -162,7 +182,8 @@ def load_gene_file(gene_path: str | Path) -> dict:
         data = _load_json_file(path)
     except json.JSONDecodeError as exc:
         raise AnalysisInputError(f"gene JSON 格式錯誤: {exc.msg}") from exc
-    return normalize_gene(data)
+    fallback_gene = get_example_gene() if fill_missing_from_example else None
+    return normalize_gene(data, fallback_gene=fallback_gene, return_metadata=return_metadata)
 
 
 def load_flow_conditions(flow_source: str | Path | dict | None) -> dict:
@@ -384,32 +405,42 @@ def _write_placeholder_png(output_path: Path) -> None:
 def _build_summary_markdown(summary: dict) -> str:
     analysis = summary["Analysis"]
     report_files = summary["ReportFiles"]
+    gene_metadata = summary.get("GeneMetadata", {})
     lines = [
         "# Low-Speed Fairing Analysis Summary",
         "",
         f"- GeneratedAt: {summary['GeneratedAt']}",
         f"- Backend: {analysis['Backend']}",
         f"- Preset: {analysis['PresetUsed']}",
-        "",
-        "## Aerodynamics",
-        "",
-        f"- Drag: {analysis['Drag']:.4f} N",
-        f"- Cd: {analysis['Cd']:.6f}",
-        f"- Cd_viscous: {analysis['Cd_viscous']:.6f}",
-        f"- Cd_pressure: {analysis['Cd_pressure']:.6f}",
-        f"- Swet: {analysis['Swet']:.3f} m^2",
-        f"- LaminarFraction: {analysis['LaminarFraction']:.3f}",
-        f"- XPeakAreaFrac: {analysis['XPeakAreaFrac']:.3f}",
-        "",
-        "## Tail Angles",
-        "",
-        f"- Top: {analysis['TailAngles']['top_deg']:.2f} deg",
-        f"- Bottom: {analysis['TailAngles']['bottom_deg']:.2f} deg",
-        f"- Side: {analysis['TailAngles']['side_deg']:.2f} deg",
-        "",
-        "## Recommendations",
-        "",
     ]
+
+    filled_fields = gene_metadata.get("filled_fields", [])
+    if filled_fields:
+        lines.extend(["", "## Gene Fill", "", f"- FilledFields: {', '.join(filled_fields)}"])
+
+    lines.extend(
+        [
+            "",
+            "## Aerodynamics",
+            "",
+            f"- Drag: {analysis['Drag']:.4f} N",
+            f"- Cd: {analysis['Cd']:.6f}",
+            f"- Cd_viscous: {analysis['Cd_viscous']:.6f}",
+            f"- Cd_pressure: {analysis['Cd_pressure']:.6f}",
+            f"- Swet: {analysis['Swet']:.3f} m^2",
+            f"- LaminarFraction: {analysis['LaminarFraction']:.3f}",
+            f"- XPeakAreaFrac: {analysis['XPeakAreaFrac']:.3f}",
+            "",
+            "## Tail Angles",
+            "",
+            f"- Top: {analysis['TailAngles']['top_deg']:.2f} deg",
+            f"- Bottom: {analysis['TailAngles']['bottom_deg']:.2f} deg",
+            f"- Side: {analysis['TailAngles']['side_deg']:.2f} deg",
+            "",
+            "## Recommendations",
+            "",
+        ]
+    )
 
     for recommendation in analysis["Recommendations"]:
         lines.append(f"- {recommendation}")
@@ -474,6 +505,7 @@ def _build_batch_summary_markdown(summary: dict) -> str:
                     f"- Swet: {entry['Swet']:.3f} m^2",
                     f"- LaminarFraction: {entry['LaminarFraction']:.3f}",
                     f"- ConstraintState: {constraint_text}",
+                    f"- FilledFields: {', '.join(entry['FilledFields']) if entry.get('FilledFields') else 'none'}",
                     f"- ReportDir: {entry['ReportDir']}",
                     "",
                 ]
@@ -495,6 +527,7 @@ def write_analysis_report_bundle(
     gene: dict,
     analysis_result: dict,
     report_config: dict | None = None,
+    gene_metadata: dict | None = None,
 ) -> dict:
     config = dict(DEFAULT_ANALYSIS_CONFIG["report"])
     if report_config:
@@ -519,6 +552,7 @@ def write_analysis_report_bundle(
     summary = {
         "GeneratedAt": datetime.now().isoformat(),
         "Gene": normalize_gene(gene),
+        "GeneMetadata": gene_metadata or {"filled_fields": []},
         "Analysis": serializable_analysis,
         "ReportFiles": report_files,
     }

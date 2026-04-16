@@ -12,7 +12,7 @@ SCRIPTS_ROOT = os.path.join(PROJECT_ROOT, "scripts")
 
 sys.path.insert(0, SRC_ROOT)
 
-from analysis.fairing_analysis import analyze_gene, get_example_gene, write_analysis_report_bundle
+from analysis.fairing_analysis import analyze_gene, get_example_gene, load_gene_file, write_analysis_report_bundle
 
 
 class TestFairingAnalysis(unittest.TestCase):
@@ -68,6 +68,23 @@ class TestFairingAnalysis(unittest.TestCase):
 
         self.assertIn("Drag", analysis)
         self.assertIn("Cd", analysis)
+
+    def test_partial_gene_can_be_filled_from_example(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            gene_path = os.path.join(temp_dir, "partial_gene.json")
+            with open(gene_path, "w", encoding="utf-8") as handle:
+                json.dump({"L": 2.6, "W_max": 0.58}, handle)
+
+            gene, metadata = load_gene_file(
+                gene_path,
+                fill_missing_from_example=True,
+                return_metadata=True,
+            )
+
+        self.assertEqual(gene["L"], 2.6)
+        self.assertEqual(gene["W_max"], 0.58)
+        self.assertIn("X_max_pos", metadata["filled_fields"])
+        self.assertEqual(gene["X_max_pos"], get_example_gene()["X_max_pos"])
 
     def test_cli_smoke_creates_report_bundle(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -157,6 +174,36 @@ class TestFairingAnalysis(unittest.TestCase):
         self.assertIn("必填 gene 欄位與建議範圍", proc.stdout)
         self.assertIn("X_max_pos", proc.stdout)
 
+    def test_cli_can_fill_missing_fields_from_example(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            gene_path = os.path.join(temp_dir, "partial_gene.json")
+            out_dir = os.path.join(temp_dir, "report")
+            with open(gene_path, "w", encoding="utf-8") as handle:
+                json.dump({"L": 2.6, "W_max": 0.58}, handle)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    os.path.join(SCRIPTS_ROOT, "analyze_fairing.py"),
+                    "--gene",
+                    gene_path,
+                    "--out",
+                    out_dir,
+                    "--fill-missing-from-example",
+                ],
+                capture_output=True,
+                text=True,
+                cwd=PROJECT_ROOT,
+            )
+
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+            self.assertIn("FilledFields:", proc.stdout)
+
+            with open(os.path.join(out_dir, "summary.json"), "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+
+            self.assertIn("X_max_pos", payload["GeneMetadata"]["filled_fields"])
+
     def test_cli_batch_mode_creates_ranked_summary(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             gene_dir = os.path.join(temp_dir, "genes")
@@ -164,8 +211,7 @@ class TestFairingAnalysis(unittest.TestCase):
             os.makedirs(gene_dir, exist_ok=True)
 
             gene_a = dict(self.gene)
-            gene_b = dict(self.gene)
-            gene_b["X_max_pos"] = 0.44
+            gene_b = {"L": 2.45, "W_max": 0.59, "X_max_pos": 0.44}
 
             with open(os.path.join(gene_dir, "gene_a.json"), "w", encoding="utf-8") as handle:
                 json.dump(gene_a, handle)
@@ -180,6 +226,7 @@ class TestFairingAnalysis(unittest.TestCase):
                     gene_dir,
                     "--out",
                     out_dir,
+                    "--fill-missing-from-example",
                 ],
                 capture_output=True,
                 text=True,
@@ -203,6 +250,7 @@ class TestFairingAnalysis(unittest.TestCase):
             self.assertEqual(payload["FailedCases"], 0)
             self.assertEqual(len(payload["RankedCases"]), 2)
             self.assertEqual(payload["RankedCases"][0]["Rank"], 1)
+            self.assertTrue(payload["RankedCases"][1]["FilledFields"])
 
 
 if __name__ == "__main__":

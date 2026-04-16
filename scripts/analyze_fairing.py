@@ -51,8 +51,13 @@ def _analyze_single_case(
     backend: str,
     output_dir,
     report_config: dict,
-) -> tuple[dict, dict]:
-    gene = load_gene_file(gene_path)
+    fill_missing_from_example: bool = False,
+) -> tuple[dict, dict, dict, dict]:
+    gene, gene_metadata = load_gene_file(
+        gene_path,
+        fill_missing_from_example=fill_missing_from_example,
+        return_metadata=True,
+    )
     analysis_result = analyze_gene(
         gene,
         flow_conditions=flow_conditions,
@@ -60,8 +65,14 @@ def _analyze_single_case(
         backend=backend,
         include_geometry=True,
     )
-    report_files = write_analysis_report_bundle(output_dir, gene, analysis_result, report_config)
-    return analysis_result, report_files
+    report_files = write_analysis_report_bundle(
+        output_dir,
+        gene,
+        analysis_result,
+        report_config,
+        gene_metadata=gene_metadata,
+    )
+    return gene, gene_metadata, analysis_result, report_files
 
 
 def main() -> int:
@@ -74,6 +85,7 @@ def main() -> int:
     parser.add_argument("--backend", choices=["fast_proxy"], help="分析 backend（目前只支援 fast_proxy）")
     parser.add_argument("--write-example-gene", metavar="PATH", help="寫出一份可直接修改的範例 gene JSON 後結束")
     parser.add_argument("--show-required-fields", action="store_true", help="列出 gene 必填欄位與建議範圍後結束")
+    parser.add_argument("--fill-missing-from-example", action="store_true", help="若 gene 缺欄位，使用範例 gene 的預設值補齊")
     args = parser.parse_args()
 
     if args.write_example_gene:
@@ -124,13 +136,14 @@ def main() -> int:
                 case_output_dir = Path(output_dir) / case_name
 
                 try:
-                    analysis_result, report_files = _analyze_single_case(
+                    _, gene_metadata, analysis_result, report_files = _analyze_single_case(
                         gene_path=str(gene_file),
                         flow_conditions=flow_conditions,
                         preset=preset,
                         backend=backend,
                         output_dir=case_output_dir,
                         report_config=defaults["report"],
+                        fill_missing_from_example=args.fill_missing_from_example,
                     )
                     constraint_report = analysis_result["ConstraintReport"]
                     entries.append(
@@ -146,6 +159,7 @@ def main() -> int:
                             "Swet": float(analysis_result["Swet"]),
                             "LaminarFraction": float(analysis_result["LaminarFraction"]),
                             "ConstraintState": constraint_report.get("all_pass") if constraint_report else None,
+                            "FilledFields": gene_metadata.get("filled_fields", []),
                             "SummaryJson": report_files["summary_json"],
                             "SummaryMarkdown": report_files["summary_md"],
                         }
@@ -176,13 +190,14 @@ def main() -> int:
                 return 2
             return 0
 
-        analysis_result, report_files = _analyze_single_case(
+        _, gene_metadata, analysis_result, report_files = _analyze_single_case(
             gene_path=args.gene,
             flow_conditions=flow_conditions,
             preset=preset,
             backend=backend,
             output_dir=output_dir,
             report_config=defaults["report"],
+            fill_missing_from_example=args.fill_missing_from_example,
         )
     except AnalysisInputError as exc:
         print(f"錯誤: {exc}", file=sys.stderr)
@@ -205,6 +220,9 @@ def main() -> int:
     print(f"LaminarFraction: {analysis_result['LaminarFraction']:.3f}")
     if constraint_report:
         print(f"HPA constraints: {'PASS' if constraint_report['all_pass'] else 'FAIL'}")
+    filled_fields = gene_metadata.get("filled_fields", [])
+    if filled_fields:
+        print(f"FilledFields: {', '.join(filled_fields)}")
     print(f"summary.json: {report_files['summary_json']}")
     print(f"summary.md: {report_files['summary_md']}")
     print(f"side_profile.png: {report_files['side_profile']}")
