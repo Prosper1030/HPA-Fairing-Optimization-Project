@@ -20,7 +20,7 @@ python scripts/analyze_fairing.py --gene <gene.json>
   - `none`：純低速整流罩空力分析
   - `hpa`：加入目前 HPA 專案使用的座艙 / 踏板 / 肩膀 / 尾長限制
 - OpenVSP：保留為 legacy / benchmark / fallback 開發工具，不再是主分析方案
-- SU2：規劃作為最終 shortlist 驗證工具，目前只保留介面，不進日常分析流程
+- SU2：作為最終 shortlist 驗證工具，現在可先產出驗證工作包，不進日常分析流程
 
 ## 快速開始
 
@@ -248,11 +248,51 @@ OpenVSP 現在的定位是：
 
 ### SU2
 
-專案已預留 `src/analysis/high_fidelity_validator.py` 作為高保真驗證入口，規劃方向是：
+SU2 現在的定位是「最終 shortlist 驗證」，不是日常分析 backend，也不是 GA 每代內圈的一部分。
+
+目前可用的入口是：
+
+```bash
+# 從 batch 排名中取前 3 名，準備 SU2 工作包
+python scripts/prepare_su2_shortlist.py \
+  --batch-summary output/analysis/batch_demo/batch_summary.json \
+  --top 3 \
+  --out output/su2_shortlist/demo
+
+# 直接用單一 gene 準備工作包
+python scripts/prepare_su2_shortlist.py \
+  --gene path/to/gene.json \
+  --out output/su2_shortlist/single_case
+
+# 用 GA 的 best_gene.json 準備工作包
+python scripts/prepare_su2_shortlist.py \
+  --best-gene output/hpa_run_xxx/logs/best_gene.json \
+  --out output/su2_shortlist/best_case
+```
+
+這個流程會為每個 case 產生：
+
+- `gene.json`
+- `summary.json` / `summary.md`
+- `fairing_geometry.csv`
+- `su2_case.cfg`
+- `PUT_MESH_HERE.txt`
+- `README.md`
+
+根目錄另外會產生：
+
+- `validation_manifest.json`
+- `validation_manifest.md`
+- `run_all_su2_cases.sh`
+
+目前的範圍是「準備可重現的 SU2 驗證工作包」：
 
 - 只對 shortlist 候選做驗證
 - 不進每代 GA 內圈
-- 不在 v1 直接整合求解器
+- 不幫你自動建 mesh
+- 不直接替你啟動 SU2 求解
+
+換句話說，它會把 proxy 基準、幾何表格與 SU2 starter config 都整理好，但最後的 meshing 與求解仍由你手動接上。
 
 ## 專案結構
 
@@ -264,6 +304,7 @@ HPA-Fairing-Optimization-Project/
 │   └── ga_config.json
 ├── scripts/
 │   ├── analyze_fairing.py
+│   ├── prepare_su2_shortlist.py
 │   ├── run_ga.py
 │   └── run_one_case.py
 ├── src/
@@ -300,6 +341,7 @@ python -m pip install -r requirements.txt
 
 ```bash
 python3 -m unittest \
+  tests.test_high_fidelity_validator \
   tests.test_fairing_analysis \
   tests.test_drag_proxy_metrics \
   tests.test_geometry_peak_position \
