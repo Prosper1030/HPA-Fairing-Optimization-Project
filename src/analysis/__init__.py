@@ -13,6 +13,7 @@ from .fairing_analysis import (
     prepare_analysis_output_dir,
     score_analysis_result,
     write_analysis_report_bundle,
+    write_batch_analysis_summary,
 )
 from .high_fidelity_validator import HighFidelityValidationNotReady, validate_shortlist
 
@@ -33,4 +34,5 @@ __all__ = [
     'score_analysis_result',
     'validate_shortlist',
     'write_analysis_report_bundle',
+    'write_batch_analysis_summary',
 ]

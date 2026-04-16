@@ -157,6 +157,53 @@ class TestFairingAnalysis(unittest.TestCase):
         self.assertIn("必填 gene 欄位與建議範圍", proc.stdout)
         self.assertIn("X_max_pos", proc.stdout)
 
+    def test_cli_batch_mode_creates_ranked_summary(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            gene_dir = os.path.join(temp_dir, "genes")
+            out_dir = os.path.join(temp_dir, "batch_report")
+            os.makedirs(gene_dir, exist_ok=True)
+
+            gene_a = dict(self.gene)
+            gene_b = dict(self.gene)
+            gene_b["X_max_pos"] = 0.44
+
+            with open(os.path.join(gene_dir, "gene_a.json"), "w", encoding="utf-8") as handle:
+                json.dump(gene_a, handle)
+            with open(os.path.join(gene_dir, "gene_b.json"), "w", encoding="utf-8") as handle:
+                json.dump(gene_b, handle)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    os.path.join(SCRIPTS_ROOT, "analyze_fairing.py"),
+                    "--gene-dir",
+                    gene_dir,
+                    "--out",
+                    out_dir,
+                ],
+                capture_output=True,
+                text=True,
+                cwd=PROJECT_ROOT,
+            )
+
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+            self.assertIn("batch 分析完成", proc.stdout)
+
+            summary_json = os.path.join(out_dir, "batch_summary.json")
+            summary_md = os.path.join(out_dir, "batch_summary.md")
+            self.assertTrue(os.path.exists(summary_json))
+            self.assertTrue(os.path.exists(summary_md))
+            self.assertTrue(os.path.exists(os.path.join(out_dir, "gene_a", "summary.json")))
+            self.assertTrue(os.path.exists(os.path.join(out_dir, "gene_b", "summary.json")))
+
+            with open(summary_json, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+
+            self.assertEqual(payload["SuccessfulCases"], 2)
+            self.assertEqual(payload["FailedCases"], 0)
+            self.assertEqual(len(payload["RankedCases"]), 2)
+            self.assertEqual(payload["RankedCases"][0]["Rank"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

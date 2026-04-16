@@ -439,6 +439,57 @@ def _build_summary_markdown(summary: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _build_batch_summary_markdown(summary: dict) -> str:
+    lines = [
+        "# Low-Speed Fairing Batch Analysis",
+        "",
+        f"- GeneratedAt: {summary['GeneratedAt']}",
+        f"- Backend: {summary['Backend']}",
+        f"- Preset: {summary['Preset']}",
+        f"- TotalCases: {summary['TotalCases']}",
+        f"- SuccessfulCases: {summary['SuccessfulCases']}",
+        f"- FailedCases: {summary['FailedCases']}",
+        "",
+        "## Ranked Cases",
+        "",
+    ]
+
+    ranked_cases = summary["RankedCases"]
+    if not ranked_cases:
+        lines.append("- No successful cases.")
+    else:
+        for entry in ranked_cases:
+            constraint_state = entry.get("ConstraintState")
+            if constraint_state is None:
+                constraint_text = "n/a"
+            else:
+                constraint_text = "PASS" if constraint_state else "FAIL"
+            lines.extend(
+                [
+                    f"### {entry['Rank']}. {entry['CaseName']}",
+                    "",
+                    f"- GeneFile: {entry['GeneFile']}",
+                    f"- Drag: {entry['Drag']:.4f} N",
+                    f"- Cd: {entry['Cd']:.6f}",
+                    f"- Swet: {entry['Swet']:.3f} m^2",
+                    f"- LaminarFraction: {entry['LaminarFraction']:.3f}",
+                    f"- ConstraintState: {constraint_text}",
+                    f"- ReportDir: {entry['ReportDir']}",
+                    "",
+                ]
+            )
+
+    failed_cases = summary["FailedCasesDetail"]
+    lines.extend(["## Failed Cases", ""])
+    if not failed_cases:
+        lines.append("- None")
+    else:
+        for entry in failed_cases:
+            lines.append(f"- {entry['CaseName']} ({entry['GeneFile']}): {entry['Error']}")
+
+    return "\n".join(lines) + "\n"
+
+
 def write_analysis_report_bundle(
     output_dir: str | Path,
     gene: dict,
@@ -490,6 +541,51 @@ def write_analysis_report_bundle(
 
     if config.get("plot_drag_breakdown", True):
         _plot_drag_breakdown(analysis_result, drag_breakdown_path)
+
+    return report_files
+
+
+def write_batch_analysis_summary(
+    output_dir: str | Path,
+    entries: list[dict],
+    *,
+    preset: str,
+    backend: str,
+) -> dict:
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    success_entries = [dict(entry) for entry in entries if entry.get("Status") == "ok"]
+    success_entries.sort(key=lambda entry: (float(entry["Drag"]), float(entry["Cd"]), entry["CaseName"]))
+    for rank, entry in enumerate(success_entries, start=1):
+        entry["Rank"] = rank
+
+    failed_entries = [dict(entry) for entry in entries if entry.get("Status") != "ok"]
+
+    summary_json_path = output_path / "batch_summary.json"
+    summary_md_path = output_path / "batch_summary.md"
+    report_files = {
+        "summary_json": str(summary_json_path),
+        "summary_md": str(summary_md_path),
+    }
+
+    summary = {
+        "GeneratedAt": datetime.now().isoformat(),
+        "Backend": backend,
+        "Preset": preset,
+        "TotalCases": len(entries),
+        "SuccessfulCases": len(success_entries),
+        "FailedCases": len(failed_entries),
+        "RankedCases": success_entries,
+        "FailedCasesDetail": failed_entries,
+        "ReportFiles": report_files,
+    }
+
+    with open(summary_json_path, "w", encoding="utf-8") as handle:
+        json.dump(summary, handle, indent=2, ensure_ascii=False, default=_json_default)
+
+    with open(summary_md_path, "w", encoding="utf-8") as handle:
+        handle.write(_build_batch_summary_markdown(summary))
 
     return report_files
 

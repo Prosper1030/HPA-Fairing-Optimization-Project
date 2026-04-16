@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from pathlib import Path
 import sys
 
 
@@ -27,12 +28,46 @@ from analysis.fairing_analysis import (
     load_gene_file,
     prepare_analysis_output_dir,
     write_analysis_report_bundle,
+    write_batch_analysis_summary,
 )
+
+
+def _make_unique_case_name(path: Path, used_names: set[str]) -> str:
+    stem = path.stem.strip() or "case"
+    candidate = stem
+    suffix = 2
+    while candidate in used_names:
+        candidate = f"{stem}_{suffix}"
+        suffix += 1
+    used_names.add(candidate)
+    return candidate
+
+
+def _analyze_single_case(
+    *,
+    gene_path: str,
+    flow_conditions: dict,
+    preset: str,
+    backend: str,
+    output_dir,
+    report_config: dict,
+) -> tuple[dict, dict]:
+    gene = load_gene_file(gene_path)
+    analysis_result = analyze_gene(
+        gene,
+        flow_conditions=flow_conditions,
+        preset=preset,
+        backend=backend,
+        include_geometry=True,
+    )
+    report_files = write_analysis_report_bundle(output_dir, gene, analysis_result, report_config)
+    return analysis_result, report_files
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="低速整流罩快速阻力分析工具")
     parser.add_argument("--gene", help="gene JSON 檔案路徑")
+    parser.add_argument("--gene-dir", help="包含多個 gene JSON 的資料夾，會執行 batch 分析")
     parser.add_argument("--flow", help="流體條件 JSON 檔案路徑")
     parser.add_argument("--out", help="報告輸出目錄")
     parser.add_argument("--preset", choices=["none", "hpa"], help="限制 preset（預設讀 analysis_config）")
@@ -57,7 +92,11 @@ def main() -> int:
         return 0
 
     if not args.gene:
-        parser.error("必須提供 --gene，或改用 --write-example-gene / --show-required-fields")
+        if not args.gene_dir:
+            parser.error("必須提供 --gene 或 --gene-dir，或改用 --write-example-gene / --show-required-fields")
+
+    if args.gene and args.gene_dir:
+        parser.error("--gene 與 --gene-dir 只能擇一使用")
 
     defaults = load_analysis_config(os.path.join(project_root, "config", "analysis_config.json"))
     backend = args.backend or defaults["backend"]
@@ -65,17 +104,86 @@ def main() -> int:
     flow_path = args.flow or os.path.join(project_root, "config", "fluid_conditions.json")
 
     try:
-        gene = load_gene_file(args.gene)
         flow_conditions = load_flow_conditions(flow_path if os.path.exists(flow_path) else None)
-        analysis_result = analyze_gene(
-            gene,
+        output_dir = prepare_analysis_output_dir(args.out, defaults["report"]["output_root"])
+
+        if args.gene_dir:
+            gene_dir = Path(args.gene_dir)
+            if not gene_dir.exists() or not gene_dir.is_dir():
+                raise AnalysisInputError(f"找不到 gene 資料夾: {gene_dir}")
+
+            gene_files = sorted(path for path in gene_dir.iterdir() if path.is_file() and path.suffix.lower() == ".json")
+            if not gene_files:
+                raise AnalysisInputError(f"gene 資料夾內沒有 JSON 檔案: {gene_dir}")
+
+            used_names: set[str] = set()
+            entries: list[dict] = []
+
+            for gene_file in gene_files:
+                case_name = _make_unique_case_name(gene_file, used_names)
+                case_output_dir = Path(output_dir) / case_name
+
+                try:
+                    analysis_result, report_files = _analyze_single_case(
+                        gene_path=str(gene_file),
+                        flow_conditions=flow_conditions,
+                        preset=preset,
+                        backend=backend,
+                        output_dir=case_output_dir,
+                        report_config=defaults["report"],
+                    )
+                    constraint_report = analysis_result["ConstraintReport"]
+                    entries.append(
+                        {
+                            "Status": "ok",
+                            "CaseName": case_name,
+                            "GeneFile": str(gene_file),
+                            "ReportDir": str(case_output_dir),
+                            "Drag": float(analysis_result["Drag"]),
+                            "Cd": float(analysis_result["Cd"]),
+                            "Cd_viscous": float(analysis_result["Cd_viscous"]),
+                            "Cd_pressure": float(analysis_result["Cd_pressure"]),
+                            "Swet": float(analysis_result["Swet"]),
+                            "LaminarFraction": float(analysis_result["LaminarFraction"]),
+                            "ConstraintState": constraint_report.get("all_pass") if constraint_report else None,
+                            "SummaryJson": report_files["summary_json"],
+                            "SummaryMarkdown": report_files["summary_md"],
+                        }
+                    )
+                except AnalysisInputError as exc:
+                    entries.append(
+                        {
+                            "Status": "error",
+                            "CaseName": case_name,
+                            "GeneFile": str(gene_file),
+                            "Error": str(exc),
+                        }
+                    )
+
+            batch_files = write_batch_analysis_summary(output_dir, entries, preset=preset, backend=backend)
+            success_count = sum(1 for entry in entries if entry["Status"] == "ok")
+            failed_count = len(entries) - success_count
+
+            print("低速整流罩 batch 分析完成")
+            print(f"Backend: {backend}")
+            print(f"Preset: {preset}")
+            print(f"成功案例: {success_count}")
+            print(f"失敗案例: {failed_count}")
+            print(f"batch_summary.json: {batch_files['summary_json']}")
+            print(f"batch_summary.md: {batch_files['summary_md']}")
+
+            if success_count == 0:
+                return 2
+            return 0
+
+        analysis_result, report_files = _analyze_single_case(
+            gene_path=args.gene,
             flow_conditions=flow_conditions,
             preset=preset,
             backend=backend,
-            include_geometry=True,
+            output_dir=output_dir,
+            report_config=defaults["report"],
         )
-        output_dir = prepare_analysis_output_dir(args.out, defaults["report"]["output_root"])
-        report_files = write_analysis_report_bundle(output_dir, gene, analysis_result, defaults["report"])
     except AnalysisInputError as exc:
         print(f"錯誤: {exc}", file=sys.stderr)
         print(
