@@ -247,7 +247,7 @@ def run_optimization(args):
 
     # 讀取面積懲罰因子
     W_area_penalty = config.get('fitness', {}).get('W_area_penalty', 0.1)
-    analysis_mode = args.analysis_mode or config.get('fitness', {}).get('analysis_mode', 'openvsp')
+    analysis_mode = args.analysis_mode or config.get('fitness', {}).get('analysis_mode', 'proxy')
     flow_block = fluid.get('flow_conditions', {})
     flow_conditions = {
         'velocity': flow_block.get('velocity', {}).get('value', 6.5),
@@ -477,7 +477,24 @@ def run_optimization(args):
     best_gene = {k: res.X[i] for i, k in enumerate(keys)}
     best_fitness = float(res.F[0])
 
-    pm.save_best_gene(best_gene, best_fitness, callback.n_gen)
+    best_analysis = evaluate_gene(
+        best_gene,
+        "best_design_summary",
+        W_area_penalty,
+        analysis_mode=analysis_mode,
+        flow_conditions=flow_conditions,
+        return_details=True,
+    )
+    pm.save_best_gene(best_gene, best_fitness, callback.n_gen, analysis=best_analysis)
+    pm.save_results({
+        'best_gene': best_gene,
+        'best_fitness': best_fitness,
+        'generation': callback.n_gen,
+        'analysis_mode': analysis_mode,
+        'best_analysis': best_analysis,
+        'elapsed_seconds': elapsed,
+        'timestamp': datetime.now().isoformat(),
+    })
 
     # 最終保存收斂歷史
     with open(pm.log_dir / 'convergence_history.json', 'w', encoding='utf-8') as f:
@@ -487,8 +504,12 @@ def run_optimization(args):
     if convergence_history:
         plot_convergence(convergence_history, str(pm.log_dir / 'convergence.png'))
 
+    export_final_vsp = bool(args.final_vsp or config.get('output', {}).get('export_final_vsp', False))
     if args.skip_final_vsp:
-        pm.log("跳過最終 VSP 匯出（--skip-final-vsp）")
+        export_final_vsp = False
+
+    if not export_final_vsp:
+        pm.log("跳過最終 VSP 匯出（預設關閉，可用 --final-vsp 啟用）")
     else:
         # 生成最佳模型
         pm.log("生成最佳模型...")
@@ -512,6 +533,7 @@ def run_optimization(args):
     pm.log(f"")
     pm.log(f"輸出目錄: {pm.run_dir}")
     pm.log(f"最佳基因: {pm.log_dir / 'best_gene.json'}")
+    pm.log(f"分析摘要: {pm.results_file}")
     pm.log(f"收斂曲線: {pm.log_dir / 'convergence.png'}")
     pm.log(f"{'='*60}")
 
@@ -529,9 +551,11 @@ def main():
     parser.add_argument('--fluid', type=str, help='流體條件配置檔案路徑')
     parser.add_argument('--resume', type=str, help='從 checkpoint.pkl 或其所在目錄續跑')
     parser.add_argument('--analysis-mode', choices=['openvsp', 'proxy'],
-                        help='阻力評估模式（預設讀 config，否則 openvsp）')
+                        help='阻力評估模式（預設讀 config，否則 proxy）')
+    parser.add_argument('--final-vsp', action='store_true',
+                        help='完成後匯出最佳解的 .vsp3 模型（預設關閉）')
     parser.add_argument('--skip-final-vsp', action='store_true',
-                        help='跳過最佳解的最終 .vsp3 匯出，適合大量快速探索')
+                        help='強制跳過最佳解的最終 .vsp3 匯出（保留舊介面）')
 
     args = parser.parse_args()
 

@@ -17,7 +17,6 @@ from typing import Any
 import numpy as np
 
 from analysis.fairing_drag_proxy import FairingDragProxy
-from optimization.hpa_asymmetric_optimizer import CST_Modeler, ConstraintChecker, HPA_Optimizer
 
 
 DEFAULT_FLOW_CONDITIONS = {
@@ -43,6 +42,14 @@ DEFAULT_ANALYSIS_CONFIG = {
 
 class AnalysisInputError(ValueError):
     """Raised when analysis input is incomplete or malformed."""
+
+
+def _optimizer_dependencies():
+    # Import lazily to avoid a circular import between the shared analysis
+    # helpers and the legacy optimizer module.
+    from optimization.hpa_asymmetric_optimizer import CST_Modeler, ConstraintChecker, HPA_Optimizer
+
+    return CST_Modeler, ConstraintChecker, HPA_Optimizer
 
 
 def _json_default(value: Any) -> Any:
@@ -87,11 +94,12 @@ def normalize_gene(gene: dict) -> dict:
         raise AnalysisInputError("gene 必須是 JSON 物件")
 
     normalized = dict(gene)
-    missing = [key for key in HPA_Optimizer.GENE_BOUNDS if key not in normalized]
+    _, _, optimizer_cls = _optimizer_dependencies()
+    missing = [key for key in optimizer_cls.GENE_BOUNDS if key not in normalized]
     if missing:
         raise AnalysisInputError(f"gene 缺少必要欄位: {', '.join(missing)}")
 
-    for key in HPA_Optimizer.GENE_BOUNDS:
+    for key in optimizer_cls.GENE_BOUNDS:
         try:
             normalized[key] = float(normalized[key])
         except (TypeError, ValueError) as exc:
@@ -184,7 +192,8 @@ def build_constraint_report(preset: str, gene: dict, curves: dict) -> dict:
     if preset != "hpa":
         raise AnalysisInputError(f"不支援的 preset: {preset}")
 
-    passed, checks = ConstraintChecker.check_all_constraints(gene, curves)
+    _, constraint_checker, _ = _optimizer_dependencies()
+    passed, checks = constraint_checker.check_all_constraints(gene, curves)
     return {
         "enabled": True,
         "all_pass": bool(passed),
@@ -217,7 +226,8 @@ def analyze_gene(
     normalized_gene = normalize_gene(gene)
     normalized_flow = load_flow_conditions(flow_conditions)
 
-    curves = CST_Modeler.generate_asymmetric_fairing(normalized_gene)
+    cst_modeler, _, _ = _optimizer_dependencies()
+    curves = cst_modeler.generate_asymmetric_fairing(normalized_gene)
     proxy = FairingDragProxy(
         velocity=normalized_flow["velocity"],
         rho=normalized_flow["rho"],
@@ -426,7 +436,8 @@ def write_analysis_report_bundle(
 
     curves = analysis_result.get("Curves")
     if curves is None:
-        curves = CST_Modeler.generate_asymmetric_fairing(normalize_gene(gene))
+        cst_modeler, _, _ = _optimizer_dependencies()
+        curves = cst_modeler.generate_asymmetric_fairing(normalize_gene(gene))
 
     if config.get("plot_side_profile", True):
         _plot_side_profile(curves, side_profile_path)

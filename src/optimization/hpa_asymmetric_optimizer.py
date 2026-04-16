@@ -24,7 +24,7 @@ if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
 from analysis.drag_analysis import DragAnalyzer
-from analysis.fairing_drag_proxy import FairingDragProxy
+from analysis.fairing_analysis import analyze_gene, score_analysis_result
 from utils.openvsp_loader import load_openvsp
 
 # 導入數學工具（來自 src/math/）
@@ -87,7 +87,7 @@ class ProjectManager:
         with open(gene_file, 'w', encoding='utf-8') as f:
             json.dump(gene, f, indent=2)
 
-    def save_best_gene(self, gene: Dict, fitness: float, generation: int):
+    def save_best_gene(self, gene: Dict, fitness: float, generation: int, analysis: Dict | None = None):
         """保存最佳基因"""
         data = {
             'gene': gene,
@@ -95,9 +95,16 @@ class ProjectManager:
             'generation': generation,
             'timestamp': datetime.now().isoformat()
         }
+        if analysis is not None:
+            data['analysis'] = analysis
         with open(self.best_gene_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2)
+            json.dump(data, f, indent=2, ensure_ascii=False)
         self.log(f"保存最佳基因: fitness={fitness:.6f}, gen={generation}")
+
+    def save_results(self, payload: Dict):
+        """保存最終結果摘要"""
+        with open(self.results_file, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
 
     def get_vsp_path(self, name: str) -> str:
         """獲取 VSP 檔案路徑"""
@@ -811,12 +818,6 @@ class HPA_Optimizer:
 
         # 統一透過 OpenVSP results API 讀取結果，避免 GA 熱路徑再做 CSV 解析。
         self.drag_analyzer = DragAnalyzer(output_dir=str(self.pm.vsp_dir))
-        self.proxy_analyzer = FairingDragProxy(
-            velocity=self.velocity,
-            rho=self.rho,
-            mu=self.mu,
-            s_ref=1.0,
-        )
         # 面積懲罰因子 (N/m²)：Score = Drag + W_area_penalty × S_wet
         self.W_area_penalty = W_area_penalty
         self.pm.log(f"面積懲罰因子 W_area_penalty = {W_area_penalty} N/m²")
@@ -846,15 +847,24 @@ class HPA_Optimizer:
 
         if self.analysis_mode == "proxy":
             try:
-                result = self.proxy_analyzer.evaluate_curves(curves)
-                drag = result["Drag"]
-                swet = result.get("Swet")
-                cd = result["Cd"]
-                area_penalty = self.W_area_penalty * swet
-                score = drag + area_penalty
+                result = analyze_gene(
+                    gene,
+                    flow_conditions={
+                        "velocity": self.velocity,
+                        "rho": self.rho,
+                        "mu": self.mu,
+                    },
+                    preset="hpa",
+                    backend="fast_proxy",
+                )
+                scored = score_analysis_result(result, self.W_area_penalty)
+                drag = scored["Drag"]
+                swet = scored.get("Swet")
+                cd = scored["Cd"]
+                score = scored["Score"]
                 self.pm.log(
                     f"{name}: [proxy] Cd={cd:.6f}, Swet={swet:.3f}m², "
-                    f"Drag={drag:.4f}N, Lam={result['LaminarFraction']:.2f}, "
+                    f"Drag={drag:.4f}N, Lam={scored['LaminarFraction']:.2f}, "
                     f"Score={score:.4f}N"
                 )
                 return score

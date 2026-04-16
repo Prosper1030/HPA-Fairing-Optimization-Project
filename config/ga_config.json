@@ -82,6 +82,7 @@
     "fitness": {
         "objective": "minimize",
         "target": "drag",
+        "analysis_mode": "proxy",
         "penalty_coefficient": 1000000,
         "W_area_penalty": 0.1,
         "W_area_penalty_description": "面積懲罰因子 (N/m²)：每增加1m²濕面積等效增加此值的阻力代價",
@@ -89,6 +90,7 @@
     },
 
     "output": {
+        "export_final_vsp": false,
         "save_all_models": false,
         "save_best_models": true,
         "save_generation_stats": true,
