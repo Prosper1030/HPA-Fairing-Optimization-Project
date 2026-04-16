@@ -12,7 +12,7 @@ SCRIPTS_ROOT = os.path.join(PROJECT_ROOT, "scripts")
 
 sys.path.insert(0, SRC_ROOT)
 
-from analysis.fairing_analysis import analyze_gene, write_analysis_report_bundle
+from analysis.fairing_analysis import analyze_gene, get_example_gene, write_analysis_report_bundle
 
 
 class TestFairingAnalysis(unittest.TestCase):
@@ -62,6 +62,13 @@ class TestFairingAnalysis(unittest.TestCase):
             self.assertEqual(payload["Analysis"]["Backend"], "fast_proxy")
             self.assertTrue(payload["Analysis"]["Recommendations"])
 
+    def test_example_gene_is_complete_and_analyzable(self):
+        example_gene = get_example_gene()
+        analysis = analyze_gene(example_gene, preset="none")
+
+        self.assertIn("Drag", analysis)
+        self.assertIn("Cd", analysis)
+
     def test_cli_smoke_creates_report_bundle(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             gene_path = os.path.join(temp_dir, "gene.json")
@@ -110,6 +117,45 @@ class TestFairingAnalysis(unittest.TestCase):
 
             self.assertNotEqual(proc.returncode, 0)
             self.assertIn("缺少必要欄位", proc.stderr)
+            self.assertIn("--write-example-gene", proc.stderr)
+
+    def test_cli_can_write_example_gene(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            gene_path = os.path.join(temp_dir, "example_gene.json")
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    os.path.join(SCRIPTS_ROOT, "analyze_fairing.py"),
+                    "--write-example-gene",
+                    gene_path,
+                ],
+                capture_output=True,
+                text=True,
+                cwd=PROJECT_ROOT,
+            )
+
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+            self.assertTrue(os.path.exists(gene_path))
+            with open(gene_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            self.assertEqual(payload["X_max_pos"], get_example_gene()["X_max_pos"])
+
+    def test_cli_can_list_required_fields(self):
+        proc = subprocess.run(
+            [
+                sys.executable,
+                os.path.join(SCRIPTS_ROOT, "analyze_fairing.py"),
+                "--show-required-fields",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=PROJECT_ROOT,
+        )
+
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertIn("必填 gene 欄位與建議範圍", proc.stdout)
+        self.assertIn("X_max_pos", proc.stdout)
 
 
 if __name__ == "__main__":

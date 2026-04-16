@@ -39,6 +39,29 @@ DEFAULT_ANALYSIS_CONFIG = {
     },
 }
 
+DEFAULT_EXAMPLE_GENE = {
+    "L": 2.5,
+    "W_max": 0.60,
+    "H_top_max": 0.95,
+    "H_bot_max": 0.35,
+    "N1": 0.5,
+    "N2_top": 0.75,
+    "N2_bot": 0.80,
+    "X_max_pos": 0.32,
+    "X_offset": 0.70,
+    "M_top": 2.5,
+    "N_top": 2.5,
+    "M_bot": 2.5,
+    "N_bot": 2.5,
+    "tail_rise": 0.08,
+    "blend_start": 0.80,
+    "blend_power": 2.2,
+    "w0": 0.25,
+    "w1": 0.35,
+    "w2": 0.30,
+    "w3": 0.10,
+}
+
 
 class AnalysisInputError(ValueError):
     """Raised when analysis input is incomplete or malformed."""
@@ -87,6 +110,29 @@ def load_analysis_config(config_path: str | Path | None) -> dict:
     if isinstance(loaded.get("report"), dict):
         config["report"].update(loaded["report"])
     return config
+
+
+def get_required_gene_fields() -> list[str]:
+    _, _, optimizer_cls = _optimizer_dependencies()
+    return list(optimizer_cls.GENE_BOUNDS.keys())
+
+
+def get_gene_field_bounds() -> dict[str, tuple[float, float]]:
+    _, _, optimizer_cls = _optimizer_dependencies()
+    return dict(optimizer_cls.GENE_BOUNDS)
+
+
+def get_example_gene() -> dict:
+    return dict(DEFAULT_EXAMPLE_GENE)
+
+
+def format_required_gene_fields() -> str:
+    lines = ["必填 gene 欄位與建議範圍:"]
+    bounds = get_gene_field_bounds()
+    for field in get_required_gene_fields():
+        lower, upper = bounds[field]
+        lines.append(f"- {field}: {lower:g} ~ {upper:g}")
+    return "\n".join(lines)
 
 
 def normalize_gene(gene: dict) -> dict:
