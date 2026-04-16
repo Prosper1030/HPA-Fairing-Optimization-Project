@@ -65,6 +65,18 @@ Windows PowerShell：
 - `w2`
 - `w3`
 
+如果你想先拿一份可直接修改的範例檔：
+
+```bash
+python scripts/analyze_fairing.py --write-example-gene example_gene.json
+```
+
+如果你只想先看必填欄位與範圍：
+
+```bash
+python scripts/analyze_fairing.py --show-required-fields
+```
+
 ### 3. 執行單一設計分析
 
 ```bash
@@ -90,6 +102,23 @@ python scripts/analyze_fairing.py \
 - `summary.md`：人可直接閱讀的摘要
 - `side_profile.png`：外形側視圖
 - `drag_breakdown.png`：黏滯阻力 / 壓力阻力拆解
+
+### 5. 執行 batch 分析
+
+如果你有一整批 gene JSON 想一起比較：
+
+```bash
+python scripts/analyze_fairing.py \
+  --gene-dir path/to/gene_directory \
+  --out output/analysis/batch_demo
+```
+
+batch 模式會：
+
+- 對資料夾內每個 `.json` 各自建立一個子目錄
+- 每個案例都產生自己的 `summary.json` / `summary.md` / 圖檔
+- 在根目錄另外產生 `batch_summary.json` 與 `batch_summary.md`
+- 依 `Drag` 由小到大做排名，方便快速比較候選外形
 
 ## 分析結果內容
 
