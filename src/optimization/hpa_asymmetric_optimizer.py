@@ -8,6 +8,7 @@ HPA 整流罩非對稱優化器
 
 import numpy as np
 from scipy.special import comb
+from scipy.interpolate import PchipInterpolator
 import os
 import sys
 import json
@@ -110,6 +111,36 @@ class CST_Modeler:
     """CST 幾何建模器，支援上下非對稱"""
 
     @staticmethod
+    def _warp_psi_to_peak_position(
+        psi: np.ndarray,
+        target_peak_position: float | None,
+        nominal_peak_position: float,
+    ) -> np.ndarray:
+        """
+        Smoothly remap the longitudinal coordinate so the sampled CST curve peaks
+        closer to the requested physical location.
+
+        We use a monotonic cubic interpolation instead of a piecewise-linear map
+        to avoid introducing an obvious kink around the requested peak station.
+        """
+        if target_peak_position is None:
+            return psi
+
+        target_peak = float(np.clip(target_peak_position, 1e-3, 1.0 - 1e-3))
+        nominal_peak = float(np.clip(nominal_peak_position, 1e-3, 1.0 - 1e-3))
+
+        if abs(target_peak - nominal_peak) < 1e-6:
+            return psi
+
+        mapper = PchipInterpolator(
+            [0.0, target_peak, 1.0],
+            [0.0, nominal_peak, 1.0],
+            extrapolate=False,
+        )
+        warped = mapper(np.clip(psi, 0.0, 1.0))
+        return np.clip(np.asarray(warped, dtype=float), 0.0, 1.0)
+
+    @staticmethod
     def class_function(psi: np.ndarray, N1: float, N2: float) -> np.ndarray:
         """CST 類別函數 C(ψ) = ψ^N1 * (1-ψ)^N2"""
         return (psi ** N1) * ((1 - psi) ** N2)
@@ -126,7 +157,7 @@ class CST_Modeler:
 
     @staticmethod
     def cst_curve(psi: np.ndarray, target_height: float, N1: float, N2: float,
-                  weights: np.ndarray) -> np.ndarray:
+                  weights: np.ndarray, peak_position: float | None = None) -> np.ndarray:
         """
         完整 CST 曲線（峰值歸一化版本）
 
@@ -144,24 +175,23 @@ class CST_Modeler:
         Returns:
             歸一化並縮放後的 CST 曲線
         """
+        psi_peak_nominal = N1 / (N1 + N2) if (N1 + N2) > 1e-6 else 0.5
+        psi_eval = CST_Modeler._warp_psi_to_peak_position(psi, peak_position, psi_peak_nominal)
+
         # 1. 計算原始 Class Function
-        C = CST_Modeler.class_function(psi, N1, N2)
+        C = CST_Modeler.class_function(psi_eval, N1, N2)
 
         # 2. 計算 Shape Function
-        S = CST_Modeler.shape_function(psi, weights)
+        S = CST_Modeler.shape_function(psi_eval, weights)
 
         # 3. 組合原始曲線
         raw_curve = C * S
 
-        # 4. 找出理論峰值位置（避免分母為 0）
-        psi_peak = N1 / (N1 + N2) if (N1 + N2) > 1e-6 else 0.5
+        # 4. 使用離散曲線本身的峰值做正規化，這樣在加入 peak_position
+        #    重新映射後仍能精確保持目標尺寸。
+        peak_val = float(np.max(raw_curve)) if raw_curve.size else 0.0
 
-        # 5. 計算峰值處的數值
-        C_peak = CST_Modeler.class_function(np.array([psi_peak]), N1, N2)[0]
-        S_peak = CST_Modeler.shape_function(np.array([psi_peak]), weights)[0]
-        peak_val = C_peak * S_peak
-
-        # 6. 歸一化並縮放（保證峰值 = target_height）
+        # 5. 歸一化並縮放（保證峰值 = target_height）
         if peak_val > 1e-6:
             normalized_curve = (raw_curve / peak_val) * target_height
         else:
@@ -205,8 +235,14 @@ class CST_Modeler:
         # 生成半寬度曲線（W_max 是全寬，需除以 2）
         # 使用平均 N2 來控制寬度曲線
         N2_avg = (gene['N2_top'] + gene['N2_bot']) / 2.0
+        x_max_pos = float(gene.get('X_max_pos', 0.25))
         width_half = CST_Modeler.cst_curve(
-            psi, gene['W_max'] / 2.0, gene['N1'], N2_avg, weights
+            psi,
+            gene['W_max'] / 2.0,
+            gene['N1'],
+            N2_avg,
+            weights,
+            peak_position=x_max_pos,
         )
 
         # ==========================================
@@ -220,10 +256,20 @@ class CST_Modeler:
 
         # 1. 生成基礎CST曲線
         z_upper_cst = CST_Modeler.cst_curve(
-            psi, gene['H_top_max'], gene['N1'], gene['N2_top'], weights
+            psi,
+            gene['H_top_max'],
+            gene['N1'],
+            gene['N2_top'],
+            weights,
+            peak_position=x_max_pos,
         )
         z_lower_cst = -CST_Modeler.cst_curve(
-            psi, gene['H_bot_max'], gene['N1'], gene['N2_bot'], weights
+            psi,
+            gene['H_bot_max'],
+            gene['N1'],
+            gene['N2_bot'],
+            weights,
+            peak_position=x_max_pos,
         )
 
         # 2. 計算混合因子
@@ -302,6 +348,7 @@ class CST_Modeler:
 
         return {
             'L': gene['L'],
+            'X_max_pos': x_max_pos,
             'psi': psi,
             'x': x,
             'width_half': width_half,      # 半寬（用於生成截面）
