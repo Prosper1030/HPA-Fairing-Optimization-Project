@@ -253,30 +253,28 @@ class FairingDragProxy:
         return 0.074 / (max(reynolds_number, 1.0) ** 0.2)
 
     def estimate_laminar_fraction(self, metrics: ProxyMetrics) -> float:
-        peak_quality = np.exp(-((metrics.x_peak_area_frac - 0.34) / 0.10) ** 2)
-        recovery_length_quality = np.exp(-((metrics.recovery_length_ratio - 0.62) / 0.20) ** 2)
-        nose_quality = np.exp(-(max(0.0, metrics.nose_angle_deg - 23.0) / 10.0) ** 2)
+        peak_quality = np.exp(-((metrics.x_peak_area_frac - 0.34) / 0.12) ** 2)
+        recovery_length_quality = np.exp(-((metrics.recovery_length_ratio - 0.62) / 0.22) ** 2)
+        nose_quality = np.exp(-(max(0.0, metrics.nose_angle_deg - 30.0) / 18.0) ** 2)
 
-        tail_excess = (
-            max(0.0, metrics.top_tail_angle_deg - 9.0)
-            + 1.25 * max(0.0, metrics.bottom_tail_angle_deg - 7.0)
-            + 0.8 * max(0.0, metrics.side_tail_angle_deg - 10.0)
-        )
-        recovery_quality = np.exp(-(tail_excess / 13.0) ** 2)
-        monotonic_quality = np.exp(-18.0 * metrics.area_non_monotonicity)
-        curvature_quality = np.exp(-0.015 * metrics.recovery_curvature)
+        top_quality = np.exp(-(max(0.0, metrics.top_tail_angle_deg - 18.0) / 14.0) ** 2)
+        bottom_quality = np.exp(-(max(0.0, metrics.bottom_tail_angle_deg - 14.0) / 11.0) ** 2)
+        side_quality = np.exp(-(max(0.0, metrics.side_tail_angle_deg - 13.0) / 8.0) ** 2)
+        recovery_quality = 0.40 * top_quality + 0.35 * bottom_quality + 0.25 * side_quality
 
-        laminar_fraction = (
-            0.14
-            + 0.42
-            * peak_quality
-            * recovery_length_quality
-            * nose_quality
-            * recovery_quality
-            * monotonic_quality
-            * curvature_quality
+        monotonic_quality = np.exp(-10.0 * metrics.area_non_monotonicity)
+        curvature_quality = np.exp(-0.006 * metrics.recovery_curvature)
+
+        quality_score = (
+            0.20 * peak_quality
+            + 0.18 * recovery_length_quality
+            + 0.12 * nose_quality
+            + 0.26 * recovery_quality
+            + 0.14 * monotonic_quality
+            + 0.10 * curvature_quality
         )
-        return float(np.clip(laminar_fraction, 0.12, 0.55))
+        laminar_fraction = 0.08 + 0.40 * quality_score
+        return float(np.clip(laminar_fraction, 0.10, 0.55))
 
     def estimate_skin_friction_cf(self, metrics: ProxyMetrics, laminar_fraction: float) -> float:
         re_total = metrics.reynolds_number
@@ -298,19 +296,19 @@ class FairingDragProxy:
         return float(1.0 + 1.5 / (fr ** 1.5) + 7.0 / (fr ** 3.0))
 
     def estimate_pressure_cd(self, metrics: ProxyMetrics) -> float:
-        top_excess = max(0.0, metrics.top_tail_angle_deg - 10.0)
-        bottom_excess = max(0.0, metrics.bottom_tail_angle_deg - 8.0)
-        side_excess = max(0.0, metrics.side_tail_angle_deg - 11.0)
-        curvature_excess = max(0.0, metrics.recovery_curvature - 10.0)
-        peak_shift = max(0.0, metrics.x_peak_area_frac - 0.45) + max(0.0, 0.22 - metrics.x_peak_area_frac)
+        top_excess = max(0.0, metrics.top_tail_angle_deg - 18.0)
+        bottom_excess = max(0.0, metrics.bottom_tail_angle_deg - 14.0)
+        side_excess = max(0.0, metrics.side_tail_angle_deg - 13.0)
+        curvature_excess = max(0.0, metrics.recovery_curvature - 4.0)
+        peak_shift = max(0.0, metrics.x_peak_area_frac - 0.48) + max(0.0, 0.20 - metrics.x_peak_area_frac)
 
         base_penalty = (
-            2.0e-5 * (top_excess ** 2)
-            + 3.5e-5 * (bottom_excess ** 2)
-            + 1.8e-5 * (side_excess ** 2)
-            + 0.010 * metrics.area_non_monotonicity
-            + 4.0e-6 * (curvature_excess ** 2)
-            + 0.012 * (peak_shift ** 2)
+            6.0e-6 * (top_excess ** 2)
+            + 1.0e-5 * (bottom_excess ** 2)
+            + 7.0e-6 * (side_excess ** 2)
+            + 0.004 * metrics.area_non_monotonicity
+            + 2.5e-6 * (curvature_excess ** 2)
+            + 0.006 * (peak_shift ** 2)
         )
 
         return float(base_penalty * (metrics.max_area / max(self.s_ref, 1e-9)))

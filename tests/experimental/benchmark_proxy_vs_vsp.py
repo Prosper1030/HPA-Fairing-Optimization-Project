@@ -56,6 +56,20 @@ def top_k_overlap(proxy_scores: list[float], vsp_scores: list[float], k: int) ->
     return len(proxy_top & vsp_top) / max(k, 1)
 
 
+def report_metric_agreement(name: str, proxy_values: list[float], vsp_values: list[float]) -> None:
+    pearson_val = pearsonr(proxy_values, vsp_values)[0]
+    spearman_val = spearmanr(proxy_values, vsp_values)[0]
+    kendall_val = kendalltau(proxy_values, vsp_values)[0]
+    top_k = min(3, len(proxy_values))
+    overlap = top_k_overlap(proxy_values, vsp_values, top_k)
+
+    print(f"\n=== {name} Agreement ===")
+    print(f"pearson : {pearson_val:.4f}")
+    print(f"spearman: {spearman_val:.4f}")
+    print(f"kendall : {kendall_val:.4f}")
+    print(f"top-{top_k} overlap: {overlap:.2f}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Compare fast proxy ranking against OpenVSP.")
     parser.add_argument('--samples', type=int, default=6, help='可行樣本數')
@@ -65,9 +79,9 @@ def main():
     args = parser.parse_args()
 
     genes = sample_feasible_genes(args.samples, args.seed)
-    proxy_scores = []
+    proxy_results = []
     proxy_times = []
-    vsp_scores = []
+    vsp_results = []
     vsp_times = []
 
     print(f"抽樣完成: {len(genes)} 個可行設計")
@@ -76,18 +90,40 @@ def main():
         name = f"bench_{idx:03d}"
 
         t0 = time.perf_counter()
-        proxy_score = evaluate_gene(gene, name, args.penalty, analysis_mode='proxy')
+        proxy_result = evaluate_gene(
+            gene,
+            name,
+            args.penalty,
+            analysis_mode='proxy',
+            return_details=True,
+        )
         proxy_times.append(time.perf_counter() - t0)
-        proxy_scores.append(proxy_score)
+        proxy_results.append(proxy_result)
 
-        print(f"[{idx + 1}/{len(genes)}] proxy={proxy_score:.6f}", flush=True)
+        print(
+            f"[{idx + 1}/{len(genes)}] "
+            f"proxy score={proxy_result['Score']:.6f}, "
+            f"Cd={proxy_result['Cd']:.6f}, "
+            f"Lam={proxy_result.get('LaminarFraction', float('nan')):.3f}",
+            flush=True,
+        )
 
         if not args.skip_vsp:
             t1 = time.perf_counter()
-            vsp_score = evaluate_gene(gene, name, args.penalty, analysis_mode='openvsp')
+            vsp_result = evaluate_gene(
+                gene,
+                name,
+                args.penalty,
+                analysis_mode='openvsp',
+                return_details=True,
+            )
             vsp_times.append(time.perf_counter() - t1)
-            vsp_scores.append(vsp_score)
-            print(f"             vsp={vsp_score:.6f}", flush=True)
+            vsp_results.append(vsp_result)
+            print(
+                f"             vsp   score={vsp_result['Score']:.6f}, "
+                f"Cd={vsp_result['Cd']:.6f}",
+                flush=True,
+            )
 
     print("\n=== Speed ===")
     print(f"proxy avg: {np.mean(proxy_times):.4f}s")
@@ -95,20 +131,36 @@ def main():
         print(f"vsp avg:   {np.mean(vsp_times):.4f}s")
         print(f"speedup:   {np.mean(vsp_times) / max(np.mean(proxy_times), 1e-9):.1f}x")
 
+    proxy_lams = [result.get("LaminarFraction") for result in proxy_results if result.get("LaminarFraction") is not None]
+    if proxy_lams:
+        print(
+            f"proxy laminar fraction: min={np.min(proxy_lams):.3f}, "
+            f"avg={np.mean(proxy_lams):.3f}, max={np.max(proxy_lams):.3f}"
+        )
+
     if args.skip_vsp:
         return
 
-    print("\n=== Rank Quality ===")
-    pearson_val = pearsonr(proxy_scores, vsp_scores)[0]
-    spearman_val = spearmanr(proxy_scores, vsp_scores)[0]
-    kendall_val = kendalltau(proxy_scores, vsp_scores)[0]
-    print(f"pearson : {pearson_val:.4f}")
-    print(f"spearman: {spearman_val:.4f}")
-    print(f"kendall : {kendall_val:.4f}")
-
-    top_k = min(3, len(proxy_scores))
-    overlap = top_k_overlap(proxy_scores, vsp_scores, top_k)
-    print(f"top-{top_k} overlap: {overlap:.2f}")
+    report_metric_agreement(
+        "Score",
+        [result["Score"] for result in proxy_results],
+        [result["Score"] for result in vsp_results],
+    )
+    report_metric_agreement(
+        "Drag",
+        [result["Drag"] for result in proxy_results],
+        [result["Drag"] for result in vsp_results],
+    )
+    report_metric_agreement(
+        "Cd",
+        [result["Cd"] for result in proxy_results],
+        [result["Cd"] for result in vsp_results],
+    )
+    report_metric_agreement(
+        "Swet",
+        [result["Swet"] for result in proxy_results],
+        [result["Swet"] for result in vsp_results],
+    )
 
 
 if __name__ == "__main__":
