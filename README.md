@@ -279,6 +279,12 @@ python scripts/prepare_su2_shortlist.py \
   --gene path/to/gene.json \
   --out output/su2_shortlist/single_case
 
+# 直接產生可跑的軸對稱 benchmark mesh
+python scripts/prepare_su2_shortlist.py \
+  --gene path/to/gene.json \
+  --out output/su2_shortlist/axis_case \
+  --mesh-mode axisymmetric_2d
+
 # 用 GA 的 best_gene.json 準備工作包
 python scripts/prepare_su2_shortlist.py \
   --best-gene output/hpa_run_xxx/logs/best_gene.json \
@@ -304,6 +310,11 @@ python scripts/run_su2_shortlist.py \
 - `PUT_MESH_HERE.txt`
 - `README.md`
 
+如果你使用 `--mesh-mode axisymmetric_2d`，每個 case 還會多出：
+
+- `fairing_mesh.su2`
+- `mesh_metadata.json`
+
 根目錄另外會產生：
 
 - `validation_manifest.json`
@@ -328,6 +339,8 @@ python scripts/run_su2_shortlist.py \
 - 但現在已經可以在 mesh 準備好後直接啟動 SU2 求解
 
 換句話說，它會把 proxy 基準、幾何表格與 SU2 starter config 都整理好；你只要把 mesh 放進 case 資料夾，就能用 `run_su2_shortlist.py` 或 `run_all_su2_cases.sh` 跑出第一版高保真比較基準。
+
+如果你想先要一個「不用外部 mesher、可直接重跑」的比較基準，可以改用 `--mesh-mode axisymmetric_2d`。這會把 fairing 轉成面積等效的軸對稱截面，並自動建立 2D axisymmetric SU2 mesh。它不是最終 3D 高保真驗證，但很適合先建立一條比 proxy 更物理、又比手工 3D meshing 更輕量的基準路徑。
 
 ## 專案結構
 
@@ -382,6 +395,7 @@ python3 -m unittest \
   tests.test_drag_proxy_metrics \
   tests.test_geometry_peak_position \
   tests.test_project_manager_serialization \
+  tests.test_su2_axisymmetric_mesh \
   tests.test_run_ga_proxy
 ```
 
