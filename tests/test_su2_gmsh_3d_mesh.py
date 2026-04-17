@@ -59,6 +59,8 @@ class TestSU2Gmsh3DMesh(unittest.TestCase):
             with open(cfg_path, "r", encoding="utf-8") as handle:
                 cfg_text = handle.read()
             self.assertIn("AXISYMMETRIC= NO", cfg_text)
+            self.assertIn("CFL_ADAPT= YES", cfg_text)
+            self.assertIn("LINEAR_SOLVER= FGMRES", cfg_text)
             self.assertNotIn("MARKER_SYM= ( axis )", cfg_text)
 
             with open(metadata_path, "r", encoding="utf-8") as handle:

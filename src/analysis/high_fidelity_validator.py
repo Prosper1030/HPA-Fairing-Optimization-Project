@@ -414,18 +414,30 @@ def _build_su2_run_summary_markdown(summary: dict) -> str:
         f"- SuccessfulCases: {summary['SuccessfulCases']}",
         f"- FailedCases: {summary['FailedCases']}",
         "",
-        "| Case | Status | Cd | Drag (N) | History |",
-        "| --- | --- | ---: | ---: | --- |",
+        "| Case | Status | Converged | Cd | Drag (N) | Cd Swing(Last10) | History |",
+        "| --- | --- | --- | ---: | ---: | ---: | --- |",
     ]
 
     for entry in summary["Cases"]:
         cd = "n/a" if entry.get("Cd") is None else f"{entry['Cd']:.6f}"
         drag = "n/a" if entry.get("Drag") is None else f"{entry['Drag']:.6f}"
+        converged = "n/a" if entry.get("Converged") is None else ("yes" if entry["Converged"] else "no")
+        cd_swing = "n/a" if entry.get("CdSwingPercentLast10") is None else f"{entry['CdSwingPercentLast10']:.3f}%"
         lines.append(
-            f"| {entry['CaseName']} | {entry['Status']} | {cd} | {drag} | {entry.get('HistoryFile', 'n/a')} |"
+            f"| {entry['CaseName']} | {entry['Status']} | {converged} | {cd} | {drag} | {cd_swing} | {entry.get('HistoryFile', 'n/a')} |"
         )
 
     return "\n".join(lines) + "\n"
+
+
+def _format_su2_sequence(values: Iterable[float | int]) -> str:
+    formatted = []
+    for value in values:
+        if isinstance(value, int):
+            formatted.append(str(value))
+        else:
+            formatted.append(f"{float(value):g}")
+    return f"( {', '.join(formatted)} )"
 
 
 def _build_su2_config(case_name: str, gene: dict, flow_conditions: dict, su2_settings: dict) -> str:
@@ -458,8 +470,10 @@ def _build_su2_config(case_name: str, gene: dict, flow_conditions: dict, su2_set
         f"CONV_CAUCHY_ELEMS= {int(su2_settings['conv_cauchy_elems'])}\n"
         f"CONV_CAUCHY_EPS= {float(su2_settings['conv_cauchy_eps']):.1e}\n"
         f"CONV_NUM_METHOD_FLOW= {su2_settings['conv_num_method_flow']}\n"
+        f"TIME_DISCRE_FLOW= {su2_settings['time_discre_flow']}\n"
         f"CFL_NUMBER= {float(su2_settings['cfl']):.2f}\n"
-        "CFL_ADAPT= NO\n"
+        f"CFL_ADAPT= {'YES' if su2_settings['cfl_adapt'] else 'NO'}\n"
+        f"CFL_ADAPT_PARAM= {_format_su2_sequence(su2_settings['cfl_adapt_param'])}\n"
         "TIME_DOMAIN= NO\n"
         "TIME_MARCHING= NO\n"
         "\n"
@@ -481,10 +495,18 @@ def _build_su2_config(case_name: str, gene: dict, flow_conditions: dict, su2_set
         f"OBJECTIVE_FUNCTION= {su2_settings['objective_function']}\n"
         f"MARKER_MONITORING = ( {su2_settings['marker_wall']} )\n"
         f"MARKER_PLOTTING = ( {su2_settings['marker_wall']} )\n"
+        f"SCREEN_WRT_FREQ_INNER= {int(su2_settings['screen_wrt_freq_inner'])}\n"
+        f"HISTORY_WRT_FREQ_INNER= {int(su2_settings['history_wrt_freq_inner'])}\n"
         f"CONV_FILENAME= {DEFAULT_SU2_RUNTIME_SETTINGS['conv_filename']}\n"
         f"TABULAR_FORMAT= {DEFAULT_SU2_RUNTIME_SETTINGS['tabular_format']}\n"
         f"SCREEN_OUTPUT= {DEFAULT_SU2_RUNTIME_SETTINGS['screen_output']}\n"
         f"HISTORY_OUTPUT= {DEFAULT_SU2_RUNTIME_SETTINGS['history_output']}\n"
+        "\n"
+        f"LINEAR_SOLVER= {su2_settings['linear_solver']}\n"
+        f"LINEAR_SOLVER_PREC= {su2_settings['linear_solver_prec']}\n"
+        f"LINEAR_SOLVER_ERROR= {float(su2_settings['linear_solver_error']):.1e}\n"
+        f"LINEAR_SOLVER_ITER= {int(su2_settings['linear_solver_iter'])}\n"
+        f"LINEAR_SOLVER_ILU_FILL_IN= {int(su2_settings['linear_solver_ilu_fill_in'])}\n"
         "\n"
         f"MESH_FILENAME= {su2_settings['mesh_filename']}\n"
         f"MESH_FORMAT= {su2_settings['mesh_format']}\n"
@@ -821,6 +843,69 @@ def _result_files_for_case(case_dir: Path) -> dict:
     }
 
 
+def _parse_stdout_convergence(stdout: str) -> dict:
+    lowered = stdout.lower()
+    termination_reason = None
+    converged = None
+
+    if "before convergence" in lowered:
+        termination_reason = "max_iterations_before_convergence"
+        converged = False
+    elif "exit success" in lowered and "before convergence" not in lowered:
+        termination_reason = "completed"
+
+    match = re.search(
+        r"\|\s*(?P<field>[^|]+?)\|\s*(?P<value>[-+0-9.eE]+)\|\s*(?P<criterion><\s*[-+0-9.eE]+)\|\s*(?P<flag>Yes|No)\|",
+        stdout,
+    )
+    if match:
+        converged = match.group("flag") == "Yes"
+        criterion_text = match.group("criterion").replace("<", "").strip()
+        return {
+            "ConvergenceField": match.group("field").strip(),
+            "LastCauchyCd": _parse_float(match.group("value")),
+            "ConvergenceCriterion": _parse_float(criterion_text),
+            "Converged": converged,
+            "TerminationReason": termination_reason,
+        }
+
+    return {
+        "ConvergenceField": None,
+        "LastCauchyCd": None,
+        "ConvergenceCriterion": None,
+        "Converged": converged,
+        "TerminationReason": termination_reason,
+    }
+
+
+def _history_convergence_metrics(rows: list[dict]) -> dict:
+    cd_values = []
+    for row in rows:
+        cd = _lookup_metric(row, "DRAG", "CD", "CFX")
+        if cd is not None:
+            cd_values.append(float(cd))
+
+    trailing_cd = cd_values[-10:]
+    cd_swing_percent = None
+    cd_mean_last10 = None
+    if trailing_cd:
+        cd_mean_last10 = float(np.mean(trailing_cd))
+        cd_last = trailing_cd[-1]
+        if abs(cd_last) > 1e-12:
+            cd_swing_percent = ((max(trailing_cd) - min(trailing_cd)) / abs(cd_last)) * 100.0
+
+    last_row = rows[-1]
+    return {
+        "LastCauchyCd": _lookup_metric(last_row, "Cauchy[CD]", "CAUCHY[CD]"),
+        "CdSwingPercentLast10": cd_swing_percent,
+        "CdMeanLast10": cd_mean_last10,
+        "ResidualPressure": _lookup_metric(last_row, 'rms[P]', 'RMS_PRESSURE'),
+        "ResidualU": _lookup_metric(last_row, 'rms[U]', 'RMS_VELOCITY-X'),
+        "ResidualV": _lookup_metric(last_row, 'rms[V]', 'RMS_VELOCITY-Y'),
+        "ResidualW": _lookup_metric(last_row, 'rms[W]', 'RMS_VELOCITY-Z'),
+    }
+
+
 def _write_shortlist_run_summary(root: Path, summary: dict) -> dict:
     summary_json_path = root / "su2_run_summary.json"
     summary_md_path = root / "su2_run_summary.md"
@@ -911,6 +996,12 @@ def run_prepared_su2_case(
     ref_area = 1.0
     dynamic_pressure = 0.5 * float(flow_conditions["rho"]) * float(flow_conditions["velocity"]) ** 2
     drag_force = None if cd is None else float(cd) * dynamic_pressure * ref_area
+    history_metrics = _history_convergence_metrics(rows)
+    stdout_convergence = _parse_stdout_convergence(completed.stdout)
+
+    converged = stdout_convergence["Converged"]
+    if converged is None and history_metrics["CdSwingPercentLast10"] is not None:
+        converged = history_metrics["CdSwingPercentLast10"] <= 0.5
 
     result = {
         "CaseName": case_path.name,
@@ -925,6 +1016,21 @@ def run_prepared_su2_case(
         "Cd": cd,
         "Drag": drag_force,
         "ForceX": force_x,
+        "Converged": converged,
+        "TerminationReason": stdout_convergence["TerminationReason"],
+        "ConvergenceField": stdout_convergence["ConvergenceField"],
+        "ConvergenceCriterion": stdout_convergence["ConvergenceCriterion"],
+        "LastCauchyCd": (
+            stdout_convergence["LastCauchyCd"]
+            if stdout_convergence["LastCauchyCd"] is not None
+            else history_metrics["LastCauchyCd"]
+        ),
+        "CdSwingPercentLast10": history_metrics["CdSwingPercentLast10"],
+        "CdMeanLast10": history_metrics["CdMeanLast10"],
+        "ResidualPressure": history_metrics["ResidualPressure"],
+        "ResidualU": history_metrics["ResidualU"],
+        "ResidualV": history_metrics["ResidualV"],
+        "ResidualW": history_metrics["ResidualW"],
         "ProxyBaseline": {
             "Cd": proxy_summary["Analysis"].get("Cd"),
             "Drag": proxy_summary["Analysis"].get("Drag"),

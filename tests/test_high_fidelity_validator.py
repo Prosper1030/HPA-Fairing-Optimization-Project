@@ -71,6 +71,8 @@ class TestHighFidelityValidator(unittest.TestCase):
                 config_text = handle.read()
             self.assertIn("SOLVER= INC_NAVIER_STOKES", config_text)
             self.assertIn("CONV_NUM_METHOD_FLOW= FDS", config_text)
+            self.assertIn("LINEAR_SOLVER= FGMRES", config_text)
+            self.assertIn("LINEAR_SOLVER_PREC= ILU", config_text)
             self.assertIn("MARKER_FAR= ( farfield )", config_text)
 
             beta_entry = next(entry for entry in saved_manifest["Cases"] if entry["CaseName"] == "beta")
@@ -149,9 +151,18 @@ class TestHighFidelityValidator(unittest.TestCase):
                 handle.write(
                     "#!/bin/sh\n"
                     "cat > history.csv <<'EOF'\n"
-                    "\"ITER\",\"DRAG\",\"FORCE_X\"\n"
-                    "1,0.031000,-0.031000\n"
+                    "\"ITER\",\"DRAG\",\"FORCE_X\",\"Cauchy[CD]\"\n"
+                    "1,0.031000,-0.031000,2.0e-04\n"
                     "EOF\n"
+                    "cat > stdout.log <<'EOF'\n"
+                    "Maximum number of iterations reached (ITER = 1) before convergence.\n"
+                    "+-----------------------------------------------------------------------+\n"
+                    "|      Convergence Field     |     Value    |   Criterion  |  Converged |\n"
+                    "+-----------------------------------------------------------------------+\n"
+                    "|                  Cauchy[CD]|       0.0002|       < 1e-05|          No|\n"
+                    "+-----------------------------------------------------------------------+\n"
+                    "EOF\n"
+                    "cat stdout.log\n"
                 )
             os.chmod(solver_path, 0o755)
 
@@ -160,6 +171,9 @@ class TestHighFidelityValidator(unittest.TestCase):
             self.assertEqual(result["Status"], "completed")
             self.assertAlmostEqual(result["Cd"], 0.031, places=6)
             self.assertAlmostEqual(result["Drag"], 0.802221875, places=6)
+            self.assertFalse(result["Converged"])
+            self.assertEqual(result["TerminationReason"], "max_iterations_before_convergence")
+            self.assertAlmostEqual(result["LastCauchyCd"], 2.0e-4, places=9)
             self.assertTrue(os.path.exists(os.path.join(case_dir, "su2_result.json")))
             self.assertTrue(os.path.exists(os.path.join(case_dir, "su2_result.md")))
 
@@ -192,6 +206,7 @@ class TestHighFidelityValidator(unittest.TestCase):
             self.assertAlmostEqual(result["Cd"], 0.172186, places=6)
             self.assertAlmostEqual(result["ForceX"], 0.172186, places=6)
             self.assertAlmostEqual(result["Drag"], 4.45585083125, places=6)
+            self.assertAlmostEqual(result["ResidualPressure"], -4.024284, places=6)
 
     def test_run_prepared_su2_case_accepts_solver_path_with_spaces(self):
         with tempfile.TemporaryDirectory(prefix="su2 solver test ") as temp_dir:
@@ -263,6 +278,7 @@ class TestHighFidelityValidator(unittest.TestCase):
             self.assertEqual(summary["SuccessfulCases"], 1)
             self.assertTrue(os.path.exists(summary["SummaryFiles"]["json"]))
             self.assertTrue(os.path.exists(summary["SummaryFiles"]["markdown"]))
+            self.assertIn("Converged", summary["Cases"][0])
 
     def test_run_shortlist_su2_cases_writes_summary_on_failure(self):
         with tempfile.TemporaryDirectory() as temp_dir:
