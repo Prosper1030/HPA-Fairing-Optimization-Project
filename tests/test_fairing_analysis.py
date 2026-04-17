@@ -12,7 +12,13 @@ SCRIPTS_ROOT = os.path.join(PROJECT_ROOT, "scripts")
 
 sys.path.insert(0, SRC_ROOT)
 
-from analysis.fairing_analysis import analyze_gene, get_example_gene, load_gene_file, write_analysis_report_bundle
+from analysis.fairing_analysis import (
+    analyze_gene,
+    build_representative_case_metadata,
+    get_example_gene,
+    load_gene_file,
+    write_analysis_report_bundle,
+)
 
 
 class TestFairingAnalysis(unittest.TestCase):
@@ -81,6 +87,39 @@ class TestFairingAnalysis(unittest.TestCase):
 
         self.assertIn("Drag", analysis)
         self.assertIn("Cd", analysis)
+
+    def test_analysis_reports_representative_tags(self):
+        aggressive_gene = {
+            **self.gene,
+            "X_max_pos": 0.4750946075323426,
+            "tail_rise": 0.15199121805064983,
+            "M_top": 3.9805360794379796,
+            "N_top": 2.633820962361373,
+            "M_bot": 3.6288991654137503,
+            "N_bot": 2.9131356487487867,
+        }
+
+        analysis = analyze_gene(aggressive_gene, preset="none")
+
+        self.assertIn("peak_aft", analysis["RepresentativeTags"])
+        self.assertIn("tail_aggressive", analysis["RepresentativeTags"])
+        self.assertGreater(analysis["GeometryTraits"]["PressureRisk"], 0.65)
+
+    def test_representative_metadata_defaults_to_mid_pack_when_no_extreme_tag(self):
+        metadata = build_representative_case_metadata(
+            {
+                "FinenessRatio": 4.3,
+                "XPeakAreaFrac": 0.33,
+                "TailAngles": {"top_deg": 30.0, "bottom_deg": 13.0, "side_deg": 11.0},
+                "Quality": {
+                    "pressure_risk": 0.45,
+                    "area_monotonicity": 0.99,
+                    "recovery_curvature": 0.02,
+                },
+            }
+        )
+
+        self.assertEqual(metadata["RepresentativeTags"], ["mid_pack"])
 
     def test_partial_gene_can_be_filled_from_example(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -224,7 +263,18 @@ class TestFairingAnalysis(unittest.TestCase):
             os.makedirs(gene_dir, exist_ok=True)
 
             gene_a = dict(self.gene)
-            gene_b = {"L": 2.45, "W_max": 0.59, "X_max_pos": 0.44}
+            gene_b = {
+                "L": 2.463576995012689,
+                "W_max": 0.5401448192294462,
+                "H_top_max": 0.9688933779766921,
+                "H_bot_max": 0.4969736180688764,
+                "X_max_pos": 0.4750946075323426,
+                "tail_rise": 0.15199121805064983,
+                "M_top": 3.9805360794379796,
+                "N_top": 2.633820962361373,
+                "M_bot": 3.6288991654137503,
+                "N_bot": 2.9131356487487867,
+            }
 
             with open(os.path.join(gene_dir, "gene_a.json"), "w", encoding="utf-8") as handle:
                 json.dump(gene_a, handle)
@@ -264,6 +314,9 @@ class TestFairingAnalysis(unittest.TestCase):
             self.assertEqual(len(payload["RankedCases"]), 2)
             self.assertEqual(payload["RankedCases"][0]["Rank"], 1)
             self.assertTrue(payload["RankedCases"][1]["FilledFields"])
+            self.assertIn("RepresentativeTags", payload["RankedCases"][0])
+            self.assertIn("GeometryTraits", payload["RankedCases"][0])
+            self.assertIn("peak_aft", payload["RankedCases"][1]["RepresentativeTags"])
 
 
 if __name__ == "__main__":

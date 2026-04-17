@@ -257,6 +257,62 @@ def generate_recommendations(result: dict) -> list[str]:
     return recommendations
 
 
+def build_representative_case_metadata(result: dict) -> dict:
+    tail = result["TailAngles"]
+    quality = result["Quality"]
+    fineness = float(result.get("FinenessRatio", 0.0))
+    x_peak = float(result["XPeakAreaFrac"])
+    pressure_risk = float(quality.get("pressure_risk", 0.0))
+    top_tail = float(tail["top_deg"])
+    bottom_tail = float(tail["bottom_deg"])
+    side_tail = float(tail["side_deg"])
+
+    tags: list[str] = []
+    if fineness >= 4.6:
+        tags.append("slender")
+    elif fineness <= 4.0:
+        tags.append("short_fat")
+
+    if x_peak <= 0.27:
+        tags.append("peak_forward")
+    elif x_peak >= 0.40:
+        tags.append("peak_aft")
+
+    aggressive_tail = (
+        pressure_risk >= 0.65
+        or bottom_tail > 18.0
+        or top_tail > 40.0
+        or side_tail > 15.0
+    )
+    conservative_tail = (
+        pressure_risk <= 0.35
+        and bottom_tail <= 12.0
+        and top_tail <= 28.0
+        and side_tail <= 10.0
+    )
+    if aggressive_tail:
+        tags.append("tail_aggressive")
+    elif conservative_tail:
+        tags.append("tail_conservative")
+
+    if not tags:
+        tags.append("mid_pack")
+
+    return {
+        "RepresentativeTags": tags,
+        "GeometryTraits": {
+            "FinenessRatio": fineness,
+            "XPeakAreaFrac": x_peak,
+            "PressureRisk": pressure_risk,
+            "TailTopDeg": top_tail,
+            "TailBottomDeg": bottom_tail,
+            "TailSideDeg": side_tail,
+            "AreaMonotonicity": float(quality.get("area_monotonicity", 0.0)),
+            "RecoveryCurvature": float(quality.get("recovery_curvature", 0.0)),
+        },
+    }
+
+
 def build_constraint_report(preset: str, gene: dict, curves: dict) -> dict:
     if preset == "none":
         return {}
@@ -314,9 +370,12 @@ def analyze_gene(
         "Cd_pressure": float(proxy_result["Cd_pressure"]),
         "Swet": float(proxy_result["Swet"]),
         "LaminarFraction": float(proxy_result["LaminarFraction"]),
+        "FinenessRatio": float(proxy_result["FinenessRatio"]),
         "XPeakAreaFrac": float(proxy_result["XPeakAreaFrac"]),
         "TailAngles": proxy_result["TailAngles"],
         "Quality": proxy_result["Quality"],
+        "RepresentativeTags": [],
+        "GeometryTraits": {},
         "Recommendations": [],
         "ConstraintReport": {},
         "PresetUsed": preset,
@@ -326,6 +385,7 @@ def analyze_gene(
     }
 
     result["Recommendations"] = generate_recommendations(result)
+    result.update(build_representative_case_metadata(result))
     result["ConstraintReport"] = build_constraint_report(preset, normalized_gene, curves)
 
     if include_geometry:
@@ -433,8 +493,10 @@ def _build_summary_markdown(summary: dict) -> str:
             f"- Cd_pressure: {analysis['Cd_pressure']:.6f}",
             f"- Swet: {analysis['Swet']:.3f} m^2",
             f"- LaminarFraction: {analysis['LaminarFraction']:.3f}",
+            f"- FinenessRatio: {analysis['FinenessRatio']:.3f}",
             f"- XPeakAreaFrac: {analysis['XPeakAreaFrac']:.3f}",
             f"- PressureRisk: {analysis['Quality'].get('pressure_risk', 0.0):.3f}",
+            f"- RepresentativeTags: {', '.join(analysis.get('RepresentativeTags', [])) or 'none'}",
             "",
             "## Tail Angles",
             "",
@@ -509,6 +571,10 @@ def _build_batch_summary_markdown(summary: dict) -> str:
                     f"- Cd: {entry['Cd']:.6f}",
                     f"- Swet: {entry['Swet']:.3f} m^2",
                     f"- LaminarFraction: {entry['LaminarFraction']:.3f}",
+                    f"- FinenessRatio: {entry['GeometryTraits']['FinenessRatio']:.3f}",
+                    f"- XPeakAreaFrac: {entry['GeometryTraits']['XPeakAreaFrac']:.3f}",
+                    f"- PressureRisk: {entry['GeometryTraits']['PressureRisk']:.3f}",
+                    f"- RepresentativeTags: {', '.join(entry['RepresentativeTags']) if entry.get('RepresentativeTags') else 'none'}",
                     f"- ConstraintState: {constraint_text}",
                     f"- FilledFields: {', '.join(entry['FilledFields']) if entry.get('FilledFields') else 'none'}",
                     f"- ReportDir: {entry['ReportDir']}",

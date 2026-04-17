@@ -159,6 +159,8 @@ def main() -> int:
                             "Cd_pressure": float(analysis_result["Cd_pressure"]),
                             "Swet": float(analysis_result["Swet"]),
                             "LaminarFraction": float(analysis_result["LaminarFraction"]),
+                            "RepresentativeTags": list(analysis_result.get("RepresentativeTags", [])),
+                            "GeometryTraits": dict(analysis_result.get("GeometryTraits", {})),
                             "ConstraintState": constraint_report.get("all_pass") if constraint_report else None,
                             "FilledFields": gene_metadata.get("filled_fields", []),
                             "SummaryJson": report_files["summary_json"],
