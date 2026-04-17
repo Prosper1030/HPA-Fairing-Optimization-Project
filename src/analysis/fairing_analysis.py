@@ -78,6 +78,139 @@ REPRESENTATIVE_THRESHOLDS = {
     "tail_side_conservative_max": 11.0,
 }
 
+REPRESENTATIVE_GENE_ARCHETYPES = (
+    {
+        "case_name": "mid_pack_example",
+        "description": "Use the project example gene as a balanced mid-pack reference.",
+        "target_tags": ["mid_pack"],
+        "overrides": {},
+    },
+    {
+        "case_name": "slender_forward_conservative",
+        "description": "Long, forward-peak body with a gentle recovery tail.",
+        "target_tags": ["slender", "peak_forward", "tail_conservative"],
+        "overrides": {
+            "L": 3.0,
+            "W_max": 0.49,
+            "H_top_max": 0.85,
+            "H_bot_max": 0.25,
+            "X_max_pos": 0.22,
+            "tail_rise": 0.05,
+            "blend_start": 0.65,
+            "blend_power": 1.55,
+            "w0": 0.35,
+            "w1": 0.45,
+            "w2": 0.20,
+            "w3": 0.05,
+        },
+    },
+    {
+        "case_name": "shortfat_aft_aggressive",
+        "description": "Short and bulky body with aft peak and aggressive tail recovery.",
+        "target_tags": ["short_fat", "peak_aft", "tail_aggressive"],
+        "overrides": {
+            "L": 1.80,
+            "W_max": 0.65,
+            "H_top_max": 1.12,
+            "H_bot_max": 0.49,
+            "X_max_pos": 0.48,
+            "tail_rise": 0.19,
+            "blend_start": 0.84,
+            "blend_power": 2.9,
+            "M_top": 3.9,
+            "M_bot": 3.8,
+            "N_top": 2.2,
+            "N_bot": 2.2,
+            "w0": 0.16,
+            "w1": 0.26,
+            "w2": 0.38,
+            "w3": 0.20,
+        },
+    },
+    {
+        "case_name": "slender_aft_aggressive",
+        "description": "Long body with aft peak and aggressive tail recovery.",
+        "target_tags": ["slender", "peak_aft", "tail_aggressive"],
+        "overrides": {
+            "L": 3.0,
+            "W_max": 0.49,
+            "H_top_max": 0.85,
+            "H_bot_max": 0.25,
+            "X_max_pos": 0.49,
+            "tail_rise": 0.18,
+            "blend_start": 0.84,
+            "blend_power": 2.9,
+            "M_top": 3.9,
+            "M_bot": 3.9,
+            "w0": 0.17,
+            "w1": 0.25,
+            "w2": 0.39,
+            "w3": 0.19,
+        },
+    },
+    {
+        "case_name": "shortfat_forward_aggressive",
+        "description": "Short body with forward peak and intentionally aggressive tail recovery.",
+        "target_tags": ["short_fat", "peak_forward", "tail_aggressive"],
+        "overrides": {
+            "L": 1.80,
+            "W_max": 0.65,
+            "H_top_max": 1.12,
+            "H_bot_max": 0.49,
+            "X_max_pos": 0.21,
+            "tail_rise": 0.05,
+            "blend_start": 0.65,
+            "blend_power": 1.55,
+            "w0": 0.35,
+            "w1": 0.45,
+            "w2": 0.20,
+            "w3": 0.05,
+        },
+    },
+    {
+        "case_name": "tail_aggressive_midbody",
+        "description": "Mid-body reference with clearly aggressive tail recovery.",
+        "target_tags": ["tail_aggressive"],
+        "overrides": {
+            "L": 2.3,
+            "W_max": 0.57,
+            "H_top_max": 0.95,
+            "H_bot_max": 0.33,
+            "X_max_pos": 0.34,
+            "tail_rise": 0.18,
+            "blend_start": 0.84,
+            "blend_power": 2.8,
+            "M_top": 3.7,
+            "M_bot": 3.5,
+            "N_top": 2.2,
+            "N_bot": 2.2,
+            "w0": 0.16,
+            "w1": 0.25,
+            "w2": 0.39,
+            "w3": 0.19,
+        },
+    },
+    {
+        "case_name": "slender_center_conservative",
+        "description": "Long body with centered peak and conservative tail recovery.",
+        "target_tags": ["tail_conservative"],
+        "overrides": {
+            "L": 2.95,
+            "W_max": 0.49,
+            "H_top_max": 0.85,
+            "H_bot_max": 0.25,
+            "X_max_pos": 0.33,
+            "tail_rise": 0.05,
+            "blend_start": 0.65,
+            "blend_power": 1.55,
+            "w0": 0.35,
+            "w1": 0.45,
+            "w2": 0.20,
+            "w3": 0.05,
+        },
+    },
+)
+
 
 class AnalysisInputError(ValueError):
     """Raised when analysis input is incomplete or malformed."""
@@ -140,6 +273,25 @@ def get_gene_field_bounds() -> dict[str, tuple[float, float]]:
 
 def get_example_gene() -> dict:
     return dict(DEFAULT_EXAMPLE_GENE)
+
+
+def get_representative_gene_cases() -> list[dict]:
+    example = get_example_gene()
+    cases: list[dict] = []
+
+    for spec in REPRESENTATIVE_GENE_ARCHETYPES:
+        gene = dict(example)
+        gene.update(spec["overrides"])
+        cases.append(
+            {
+                "CaseName": spec["case_name"],
+                "Description": spec["description"],
+                "TargetTags": list(spec["target_tags"]),
+                "Gene": normalize_gene(gene),
+            }
+        )
+
+    return cases
 
 
 def format_required_gene_fields() -> str:
