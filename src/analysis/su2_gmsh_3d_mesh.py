@@ -15,20 +15,22 @@ import numpy as np
 
 
 DEFAULT_GMSH_3D_MESH_OPTIONS = {
-    "section_points": 28,
-    "body_section_count": 24,
-    "loft_max_degree": 3,
+    "section_points": 20,
+    "body_section_count": 18,
+    "loft_max_degree": 2,
+    "make_ruled": True,
     "upstream_factor": 1.5,
     "downstream_factor": 3.5,
     "lateral_factor": 2.8,
     "vertical_factor": 2.8,
     "min_lateral_factor": 0.65,
     "min_vertical_factor": 0.65,
-    "near_body_size_factor": 0.030,
-    "farfield_size_factor": 0.18,
-    "wake_size_factor": 0.055,
+    "near_body_size_factor": 0.040,
+    "farfield_size_factor": 0.22,
+    "wake_size_factor": 0.070,
     "wake_length_factor": 1.6,
     "wake_half_width_factor": 0.70,
+    "tip_trim_scale_factor": 0.004,
 }
 
 GMSH_TRIANGLE = 2
@@ -82,10 +84,11 @@ def _section_profile(
     bot_exp: float,
     section_points: int,
     length: float,
+    min_section_scale: float,
 ) -> list[tuple[float, float, float]]:
-    y_half = max(float(width_half), 1e-4 * length)
+    y_half = max(float(width_half), min_section_scale)
     z_center = 0.5 * (float(z_upper) + float(z_lower))
-    total_height = max(float(z_upper) - float(z_lower), 1e-4 * length)
+    total_height = max(float(z_upper) - float(z_lower), min_section_scale)
     half_height = 0.5 * total_height
 
     points: list[tuple[float, float, float]] = []
@@ -112,9 +115,19 @@ def _section_profiles(curves: dict, options: dict) -> list[list[tuple[float, flo
     z_upper = np.asarray(curves["z_upper"], dtype=float)
     z_lower = np.asarray(curves["z_lower"], dtype=float)
     length = float(curves["L"])
+    min_section_scale = float(options["tip_trim_scale_factor"]) * length
+
+    section_scale = np.maximum(width_half, z_upper - z_lower)
+    valid_indices = np.flatnonzero(section_scale >= min_section_scale)
+    if len(valid_indices) >= 2:
+        start_index = int(valid_indices[0])
+        end_index = int(valid_indices[-1])
+    else:
+        start_index = 1 if len(x_coords) > 2 else 0
+        end_index = len(x_coords) - 2 if len(x_coords) > 2 else len(x_coords) - 1
 
     section_count = max(int(options["body_section_count"]), len(x_coords))
-    sample_x = np.linspace(float(x_coords[0]), float(x_coords[-1]), section_count)
+    sample_x = np.linspace(float(x_coords[start_index]), float(x_coords[end_index]), section_count)
     sampled_width = _resample_array(x_coords, width_half, sample_x)
     sampled_upper = _resample_array(x_coords, z_upper, sample_x)
     sampled_lower = _resample_array(x_coords, z_lower, sample_x)
@@ -132,6 +145,7 @@ def _section_profiles(curves: dict, options: dict) -> list[list[tuple[float, flo
                 bot_exp,
                 int(options["section_points"]),
                 length,
+                min_section_scale,
             )
         )
     return profiles
@@ -139,9 +153,11 @@ def _section_profiles(curves: dict, options: dict) -> list[list[tuple[float, flo
 
 def _add_section_wire(gmsh, section_points: list[tuple[float, float, float]]) -> int:
     point_tags = [gmsh.model.occ.addPoint(x_value, y_value, z_value) for x_value, y_value, z_value in section_points]
-    point_tags.append(point_tags[0])
-    curve_tag = gmsh.model.occ.addBSpline(point_tags)
-    return gmsh.model.occ.addWire([curve_tag], checkClosed=True)
+    curve_tags = []
+    for index, start_tag in enumerate(point_tags):
+        end_tag = point_tags[(index + 1) % len(point_tags)]
+        curve_tags.append(gmsh.model.occ.addLine(start_tag, end_tag))
+    return gmsh.model.occ.addWire(curve_tags, checkClosed=True)
 
 
 def _box_bounds(curves: dict, options: dict) -> dict:
@@ -359,7 +375,7 @@ def generate_gmsh_3d_mesh(
         loft_entities = gmsh.model.occ.addThruSections(
             wire_tags,
             makeSolid=True,
-            makeRuled=False,
+            makeRuled=bool(resolved_options["make_ruled"]),
             maxDegree=int(resolved_options["loft_max_degree"]),
         )
         fairing_volume_tag = next(tag for dim, tag in loft_entities if dim == 3)
