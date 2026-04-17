@@ -189,6 +189,7 @@ def prepare_ga_su2_shortlist(pm, *, top_n: int, flow_conditions: dict, output_di
         output_dir=shortlist_dir,
         flow_conditions=flow_conditions,
         preset="hpa",
+        report_config={"use_placeholder_plots": True},
     )
     pm.log(f"SU2 shortlist 工作包已建立: {manifest['ManifestFiles']['json']}")
     return {

@@ -62,6 +62,19 @@ class TestFairingAnalysis(unittest.TestCase):
             self.assertEqual(payload["Analysis"]["Backend"], "fast_proxy")
             self.assertTrue(payload["Analysis"]["Recommendations"])
 
+    def test_report_bundle_can_use_placeholder_plots(self):
+        analysis = analyze_gene(self.gene, preset="none", include_geometry=True)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_files = write_analysis_report_bundle(
+                temp_dir,
+                self.gene,
+                analysis,
+                report_config={"use_placeholder_plots": True},
+            )
+            self.assertTrue(os.path.exists(report_files["side_profile"]))
+            self.assertTrue(os.path.exists(report_files["drag_breakdown"]))
+
     def test_example_gene_is_complete_and_analyzable(self):
         example_gene = get_example_gene()
         analysis = analyze_gene(example_gene, preset="none")

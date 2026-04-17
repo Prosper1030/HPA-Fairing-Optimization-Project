@@ -464,6 +464,7 @@ def prepare_shortlist_validation_package(
     preset: str = "none",
     fill_missing_from_example: bool = False,
     su2_settings: Mapping | None = None,
+    report_config: Mapping | None = None,
 ) -> dict:
     if backend != "su2":
         raise ValueError(f"Unsupported high-fidelity backend: {backend}")
@@ -504,6 +505,7 @@ def prepare_shortlist_validation_package(
             case_dir,
             gene,
             analysis,
+            report_config=report_config,
             gene_metadata=gene_metadata,
         )
         _write_geometry_table(analysis["Curves"], case_dir / "fairing_geometry.csv")
@@ -616,6 +618,7 @@ def validate_shortlist(
     preset: str = "none",
     fill_missing_from_example: bool = False,
     su2_settings: Mapping | None = None,
+    report_config: Mapping | None = None,
 ) -> dict:
     return prepare_shortlist_validation_package(
         candidates,
@@ -625,4 +628,5 @@ def validate_shortlist(
         preset=preset,
         fill_missing_from_example=fill_missing_from_example,
         su2_settings=su2_settings,
+        report_config=report_config,
     )

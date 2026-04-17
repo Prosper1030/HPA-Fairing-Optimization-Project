@@ -36,6 +36,7 @@ DEFAULT_ANALYSIS_CONFIG = {
         "write_summary_markdown": True,
         "plot_side_profile": True,
         "plot_drag_breakdown": True,
+        "use_placeholder_plots": False,
     },
 }
 
@@ -571,10 +572,16 @@ def write_analysis_report_bundle(
         curves = cst_modeler.generate_asymmetric_fairing(normalize_gene(gene))
 
     if config.get("plot_side_profile", True):
-        _plot_side_profile(curves, side_profile_path)
+        if config.get("use_placeholder_plots", False):
+            _write_placeholder_png(side_profile_path)
+        else:
+            _plot_side_profile(curves, side_profile_path)
 
     if config.get("plot_drag_breakdown", True):
-        _plot_drag_breakdown(analysis_result, drag_breakdown_path)
+        if config.get("use_placeholder_plots", False):
+            _write_placeholder_png(drag_breakdown_path)
+        else:
+            _plot_drag_breakdown(analysis_result, drag_breakdown_path)
 
     return report_files
 
