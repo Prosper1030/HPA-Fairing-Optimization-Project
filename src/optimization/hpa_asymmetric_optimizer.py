@@ -47,6 +47,18 @@ CSTDerivatives = cst_derivatives.CSTDerivatives
 # ==========================================
 # 專案檔案管理器
 # ==========================================
+def _json_default(value):
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, (np.floating, np.integer)):
+        return value.item()
+    if isinstance(value, np.bool_):
+        return bool(value)
+    if isinstance(value, Path):
+        return str(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
 class ProjectManager:
     """管理專案輸出目錄和檔案"""
 
@@ -99,13 +111,13 @@ class ProjectManager:
         if analysis is not None:
             data['analysis'] = analysis
         with open(self.best_gene_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+            json.dump(data, f, indent=2, ensure_ascii=False, default=_json_default)
         self.log(f"保存最佳基因: fitness={fitness:.6f}, gen={generation}")
 
     def save_results(self, payload: Dict):
         """保存最終結果摘要"""
         with open(self.results_file, 'w', encoding='utf-8') as f:
-            json.dump(payload, f, indent=2, ensure_ascii=False)
+            json.dump(payload, f, indent=2, ensure_ascii=False, default=_json_default)
 
     def record_candidate(self, gene: Dict, score: float, generation: int, individual: int, analysis_mode: str):
         """追加記錄每個已評估候選，供後續 shortlist 與追蹤使用。"""
