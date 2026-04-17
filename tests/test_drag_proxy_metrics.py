@@ -74,9 +74,44 @@ class TestDragProxyMetrics(unittest.TestCase):
             CST_Modeler.generate_asymmetric_fairing(steep_tail_gene, num_sections=160)
         )
 
-        self.assertEqual(result["Model"], "fast_drag_proxy_v2")
-        self.assertGreater(result["Cd_pressure"], 0.08)
+        self.assertEqual(result["Model"], "fast_drag_proxy_v3")
+        self.assertGreater(result["Cd_pressure"], 0.015)
         self.assertGreater(result["Quality"]["pressure_risk"], 0.65)
+
+    def test_proxy_best_gene_stays_near_boundary_layer_su2_scale(self):
+        proxy = FairingDragProxy()
+        best_gene = {
+            "L": 2.463576995012689,
+            "W_max": 0.5401448192294462,
+            "H_top_max": 0.9688933779766921,
+            "H_bot_max": 0.4969736180688764,
+            "N1": 0.8046174873474908,
+            "N2_top": 0.719789404087345,
+            "N2_bot": 0.7560220834250201,
+            "X_max_pos": 0.4750946075323426,
+            "X_offset": 0.6875715657863976,
+            "M_top": 3.9805360794379796,
+            "N_top": 2.633820962361373,
+            "M_bot": 3.6288991654137503,
+            "N_bot": 2.9131356487487867,
+            "tail_rise": 0.15199121805064983,
+            "blend_start": 0.8173829309961446,
+            "blend_power": 1.9435394606842078,
+            "w0": 0.3026334562712985,
+            "w1": 0.3464006669710251,
+            "w2": 0.3013001624596976,
+            "w3": 0.11976273259867327,
+        }
+
+        result = proxy.evaluate_curves(
+            CST_Modeler.generate_asymmetric_fairing(best_gene, num_sections=160)
+        )
+
+        su2_boundary_layer_cd = 0.04955419767
+        relative_error = abs(result["Cd"] - su2_boundary_layer_cd) / su2_boundary_layer_cd
+
+        self.assertLess(result["Cd"], 0.08)
+        self.assertLess(relative_error, 0.35)
 
     def test_evaluate_gene_proxy_details_are_self_consistent(self):
         result = evaluate_gene(

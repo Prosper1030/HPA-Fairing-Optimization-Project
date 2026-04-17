@@ -309,15 +309,19 @@ class FairingDragProxy:
         low_fineness = max(0.0, 3.2 - metrics.fineness_ratio)
         low_laminar = max(0.0, 0.38 - laminar_fraction)
 
+        # The SU2 3D boundary-layer benchmark suggests that the v2 penalty was
+        # too aggressive in absolute magnitude for otherwise smooth streamlined
+        # tails. Keep the same qualitative drivers, but scale the penalty toward
+        # a preliminary-design correlation instead of a worst-case guardrail.
         base_penalty = (
-            1.5e-4 * (top_excess ** 2)
-            + 2.5e-4 * (bottom_excess ** 2)
-            + 8.0e-5 * (side_excess ** 2)
-            + 0.008 * metrics.area_non_monotonicity
-            + 1.5e-5 * (curvature_excess ** 2)
-            + 0.012 * (peak_shift ** 2)
-            + 0.010 * (low_fineness ** 2)
-            + 0.020 * (low_laminar ** 2)
+            3.0e-5 * (top_excess ** 2)
+            + 5.0e-5 * (bottom_excess ** 2)
+            + 1.5e-5 * (side_excess ** 2)
+            + 0.006 * metrics.area_non_monotonicity
+            + 7.5e-6 * (curvature_excess ** 2)
+            + 0.006 * (peak_shift ** 2)
+            + 0.008 * (low_fineness ** 2)
+            + 0.006 * (low_laminar ** 2)
         )
 
         pressure_cd = float(base_penalty * (metrics.max_area / max(self.s_ref, 1e-9)))
@@ -363,5 +367,5 @@ class FairingDragProxy:
                 "recovery_curvature": float(metrics.recovery_curvature),
                 "pressure_risk": float(pressure_risk),
             },
-            "Model": "fast_drag_proxy_v2",
+            "Model": "fast_drag_proxy_v3",
         }
