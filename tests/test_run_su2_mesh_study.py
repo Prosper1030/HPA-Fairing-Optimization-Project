@@ -79,6 +79,8 @@ class TestRunSU2MeshStudy(unittest.TestCase):
             with open(summary_json, "r", encoding="utf-8") as handle:
                 payload = json.load(handle)
 
+            self.assertEqual(payload["CaseCount"], 1)
+            self.assertEqual(payload["ReferenceReadyCaseCount"], 0)
             self.assertEqual(len(payload["Profiles"]), 1)
             self.assertEqual(payload["Profiles"][0]["Profile"], "coarse")
             self.assertTrue(payload["Profiles"][0]["Converged"])
@@ -86,6 +88,89 @@ class TestRunSU2MeshStudy(unittest.TestCase):
             self.assertEqual(payload["Profiles"][0]["TerminationReason"], "completed")
             self.assertGreater(payload["Profiles"][0]["Nodes"], 0)
             self.assertGreater(payload["Profiles"][0]["VolumeElements"], 0)
+            self.assertEqual(payload["ReferenceAssessment"]["ReferenceStatus"], "NotReferenceReady")
+
+    def test_cli_runs_multi_case_mesh_study_and_marks_reference_ready(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            gene_a_path = os.path.join(temp_dir, "gene_a.json")
+            gene_b_path = os.path.join(temp_dir, "gene_b.json")
+            output_dir = os.path.join(temp_dir, "study")
+            solver_path = os.path.join(temp_dir, "fake_su2.sh")
+
+            gene_a = get_example_gene()
+            gene_b = dict(get_example_gene())
+            gene_b["L"] = float(gene_b["L"]) * 1.03
+
+            with open(gene_a_path, "w", encoding="utf-8") as handle:
+                json.dump(gene_a, handle, indent=2, ensure_ascii=False)
+            with open(gene_b_path, "w", encoding="utf-8") as handle:
+                json.dump(gene_b, handle, indent=2, ensure_ascii=False)
+
+            with open(solver_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "#!/bin/sh\n"
+                    "cat > history.csv <<'EOF'\n"
+                    "\"ITER\",\"DRAG\",\"FORCE_X\",\"Cauchy[CD]\"\n"
+                    "1,0.0288,-0.0288,8.0e-05\n"
+                    "2,0.0282,-0.0282,4.0e-06\n"
+                    "3,0.0281,-0.0281,2.0e-06\n"
+                    "4,0.0281,-0.0281,1.5e-06\n"
+                    "5,0.0281,-0.0281,1.1e-06\n"
+                    "6,0.0281,-0.0281,1.0e-06\n"
+                    "EOF\n"
+                    "cat <<'EOF'\n"
+                    "All convergence criteria satisfied.\n"
+                    "+-----------------------------------------------------------------------+\n"
+                    "|      Convergence Field     |     Value    |   Criterion  |  Converged |\n"
+                    "+-----------------------------------------------------------------------+\n"
+                    "|                  Cauchy[CD]|       1.0e-06|       < 2e-06|         Yes|\n"
+                    "+-----------------------------------------------------------------------+\n"
+                    "EOF\n"
+                )
+            os.chmod(solver_path, 0o755)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    os.path.join(SCRIPTS_ROOT, "run_su2_mesh_study.py"),
+                    "--gene",
+                    gene_a_path,
+                    "--gene",
+                    gene_b_path,
+                    "--out",
+                    output_dir,
+                    "--profile",
+                    "fine",
+                    "--profile",
+                    "finer",
+                    "--solver-cmd",
+                    solver_path,
+                ],
+                capture_output=True,
+                text=True,
+                cwd=PROJECT_ROOT,
+            )
+
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+            self.assertIn("Cases: 2", proc.stdout)
+            self.assertIn("ReferenceReadyCases: 2", proc.stdout)
+
+            summary_json = os.path.join(output_dir, "mesh_study_summary.json")
+            with open(summary_json, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+
+            self.assertEqual(payload["CaseCount"], 2)
+            self.assertEqual(payload["ReferenceReadyCaseCount"], 2)
+            self.assertEqual(payload["NotReferenceReadyCaseCount"], 0)
+            self.assertEqual(payload["RequestedProfiles"], ["fine", "finer"])
+            self.assertEqual(len(payload["Cases"]), 2)
+            for case in payload["Cases"]:
+                self.assertEqual(case["ReferenceAssessment"]["ReferenceStatus"], "ReferenceReady")
+                self.assertTrue(case["ReferenceAssessment"]["ReferenceReady"])
+                self.assertEqual(len(case["Profiles"]), 2)
+                self.assertEqual(case["Profiles"][0]["Profile"], "fine")
+                self.assertEqual(case["Profiles"][1]["Profile"], "finer")
+                self.assertAlmostEqual(case["ReferenceAssessment"]["FineToFinerDeltaCdPercent"], 0.0, places=9)
 
 
 if __name__ == "__main__":
