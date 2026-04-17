@@ -330,6 +330,14 @@ python scripts/run_su2_mesh_study.py \
 - `fairing_surface.obj`
 - `README.md`
 
+如果你沒有特別指定 `--geometry-export`，目前預設就會幫你產出：
+
+- `geometry_preview.html`
+- `fairing_surface.stl`
+- `fairing_surface.obj`
+
+CLI 完成時也會直接把第一個 case 的預覽與 mesh 路徑印出來，方便你立刻打開檢查幾何。
+
 如果你使用 `--mesh-mode axisymmetric_2d`，每個 case 還會多出：
 
 - `fairing_mesh.su2`

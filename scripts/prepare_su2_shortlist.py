@@ -135,6 +135,15 @@ def _normalize_geometry_exports(raw_exports: list[str]) -> list[str] | None:
     return exports or None
 
 
+def _first_existing_prepared_file(manifest: dict, key: str) -> str | None:
+    for case in manifest.get("Cases", []):
+        prepared = case.get("PreparedFiles", {})
+        path = prepared.get(key)
+        if path:
+            return str(path)
+    return None
+
+
 def _collect_candidates(args) -> list[dict]:
     candidates: list[dict] = []
 
@@ -175,7 +184,7 @@ def main() -> int:
         "--geometry-export",
         action="append",
         default=[],
-        help="匯出格式（可重複）。可用：preview、stl、obj、step、brep、html(等同 preview)",
+        help="匯出格式（可重複）。可用：preview、stl、obj、step、brep、html(等同 preview)；未指定時預設產出 preview + stl + obj",
     )
     parser.add_argument(
         "--geometry-section-count",
@@ -228,6 +237,15 @@ def main() -> int:
     print(f"validation_manifest.json: {manifest['ManifestFiles']['json']}")
     print(f"validation_manifest.md: {manifest['ManifestFiles']['markdown']}")
     print(f"run_all_su2_cases.sh: {manifest['RunScript']}")
+    preview_path = _first_existing_prepared_file(manifest, "geometry_preview_html")
+    obj_path = _first_existing_prepared_file(manifest, "geometry_obj")
+    stl_path = _first_existing_prepared_file(manifest, "geometry_stl")
+    if preview_path:
+        print(f"geometry_preview.html: {preview_path}")
+    if obj_path:
+        print(f"fairing_surface.obj: {obj_path}")
+    if stl_path:
+        print(f"fairing_surface.stl: {stl_path}")
     return 0
 
 

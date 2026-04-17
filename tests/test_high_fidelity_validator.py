@@ -128,6 +128,9 @@ class TestHighFidelityValidator(unittest.TestCase):
 
             self.assertEqual(proc.returncode, 0, msg=proc.stderr)
             self.assertIn("SU2 shortlist 工作包準備完成", proc.stdout)
+            self.assertIn("geometry_preview.html:", proc.stdout)
+            self.assertIn("fairing_surface.obj:", proc.stdout)
+            self.assertIn("fairing_surface.stl:", proc.stdout)
             self.assertTrue(os.path.exists(os.path.join(output_dir, "validation_manifest.json")))
             self.assertTrue(os.path.exists(os.path.join(output_dir, "shortlist_report.json")))
             self.assertTrue(os.path.exists(os.path.join(output_dir, "run_all_su2_cases.sh")))
