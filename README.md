@@ -264,6 +264,10 @@ SU2 現在的定位是「最終 shortlist 驗證」，不是日常分析 backend
 目前可用的入口是：
 
 ```bash
+# 如果手邊沒有現成 gene，可先產生一組家族覆蓋的代表案例
+python scripts/generate_representative_genes.py \
+  --out output/representative_cases/demo
+
 # 從 batch 排名中取前 3 名，準備 SU2 工作包
 python scripts/prepare_su2_shortlist.py \
   --batch-summary output/analysis/batch_demo/batch_summary.json \
@@ -316,6 +320,18 @@ python scripts/run_su2_mesh_study.py \
   --profile finer \
   --out output/su2_mesh_study/demo
 ```
+
+`generate_representative_genes.py` 會直接寫出：
+
+- `genes/*.json`
+- `cases/<case>/summary.json`
+- `cases/<case>/summary.md`
+- `batch_summary.json`
+- `batch_summary.md`
+- `representative_manifest.json`
+- `representative_manifest.md`
+
+這樣你沒有既有 gene 檔時，也能先產生一組覆蓋 `slender / short_fat / peak_forward / peak_aft / tail_aggressive / tail_conservative / mid_pack` 的驗證起點，再接到 `run_su2_mesh_study.py`。
 
 這個流程會為每個 case 產生：
 
