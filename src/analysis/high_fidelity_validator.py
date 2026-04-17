@@ -39,10 +39,20 @@ DEFAULT_SU2_SETTINGS = {
     "iterations": 1500,
     "inner_iterations": 50,
     "cfl": 10.0,
+    "cfl_adapt": False,
+    "cfl_adapt_param": (0.1, 2.0, 1.0, 25.0, 1e-3, 0),
     "conv_startiter": 20,
     "conv_cauchy_elems": 25,
     "conv_cauchy_eps": 1e-6,
     "conv_num_method_flow": "FDS",
+    "time_discre_flow": "EULER_IMPLICIT",
+    "linear_solver": "FGMRES",
+    "linear_solver_prec": "ILU",
+    "linear_solver_error": 1e-6,
+    "linear_solver_iter": 5,
+    "linear_solver_ilu_fill_in": 0,
+    "screen_wrt_freq_inner": 1,
+    "history_wrt_freq_inner": 1,
     "marker_wall": "fairing",
     "marker_far": "farfield",
     "mesh_filename": "fairing_mesh.su2",
@@ -68,12 +78,21 @@ AXISYMMETRIC_BENCHMARK_SU2_SETTINGS = {
 }
 
 GMSH_3D_BENCHMARK_SU2_SETTINGS = {
-    "iterations": 180,
-    "inner_iterations": 180,
-    "cfl": 3.0,
-    "conv_startiter": 25,
-    "conv_cauchy_elems": 20,
-    "conv_cauchy_eps": 1e-5,
+    "iterations": 600,
+    "inner_iterations": 600,
+    "cfl": 1.5,
+    "cfl_adapt": True,
+    "cfl_adapt_param": (0.5, 1.25, 1.0, 12.0, 1e-2, 30),
+    "conv_startiter": 40,
+    "conv_cauchy_elems": 30,
+    "conv_cauchy_eps": 3e-6,
+    "linear_solver": "FGMRES",
+    "linear_solver_prec": "ILU",
+    "linear_solver_error": 1e-3,
+    "linear_solver_iter": 12,
+    "linear_solver_ilu_fill_in": 0,
+    "screen_wrt_freq_inner": 10,
+    "history_wrt_freq_inner": 1,
 }
 
 SU2_DOC_LINKS = {
@@ -346,6 +365,14 @@ def _build_su2_result_markdown(result: dict) -> str:
         lines.append(f"- Iterations: {result['Iterations']}")
     if result.get("ForceX") is not None:
         lines.append(f"- ForceX: {result['ForceX']:.6f}")
+    if result.get("Converged") is not None:
+        lines.append(f"- Converged: {'yes' if result['Converged'] else 'no'}")
+    if result.get("TerminationReason"):
+        lines.append(f"- TerminationReason: {result['TerminationReason']}")
+    if result.get("LastCauchyCd") is not None:
+        lines.append(f"- LastCauchyCd: {result['LastCauchyCd']:.6e}")
+    if result.get("CdSwingPercentLast10") is not None:
+        lines.append(f"- CdSwingPercentLast10: {result['CdSwingPercentLast10']:.3f}%")
 
     lines.extend(
         [
