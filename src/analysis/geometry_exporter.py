@@ -438,22 +438,22 @@ def _write_preview_html(
       }}
 
       function drawAxesOverlay() {{
-        const axisScale = Math.min(canvas.width, canvas.height) * 0.08;
-        const originModel = {{ x: 0.0, y: 0.0, z: 0.0 }};
-        const xModel = {{ x: axisScale / scaleBase, y: 0.0, z: 0.0 }};
-        const yModel = {{ x: 0.0, y: axisScale / scaleBase, z: 0.0 }};
-        const zModel = {{ x: 0.0, y: 0.0, z: axisScale / scaleBase }};
+        const axisPixels = Math.min(canvas.width, canvas.height) * 0.08;
         const origin = [92, canvas.height - 78];
         const projectAxis = (point) => {{
           const rotated = applyRotation(point);
+          const inPlaneNorm = Math.hypot(rotated[0], rotated[1]);
+          if (inPlaneNorm <= 1e-8) {{
+            return [origin[0], origin[1]];
+          }}
           return [
-            origin[0] + rotated[0] * scaleBase * 0.55,
-            origin[1] - rotated[1] * scaleBase * 0.55,
+            origin[0] + (rotated[0] / inPlaneNorm) * axisPixels,
+            origin[1] - (rotated[1] / inPlaneNorm) * axisPixels,
           ];
         }};
-        const px = projectAxis(xModel);
-        const py = projectAxis(yModel);
-        const pz = projectAxis(zModel);
+        const px = projectAxis({{ x: 1.0, y: 0.0, z: 0.0 }});
+        const py = projectAxis({{ x: 0.0, y: 1.0, z: 0.0 }});
+        const pz = projectAxis({{ x: 0.0, y: 0.0, z: 1.0 }});
         ctx.fillStyle = "rgba(255,255,255,0.88)";
         ctx.fillRect(16, canvas.height - 116, 150, 92);
         ctx.strokeStyle = "rgba(40, 58, 78, 0.20)";
