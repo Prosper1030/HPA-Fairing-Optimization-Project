@@ -74,6 +74,11 @@ class TestHighFidelityValidator(unittest.TestCase):
             self.assertIn('"side": {"yaw": -1.5707963267948966, "pitch": 0.0, "roll": 0.0, "zoom": 0.82}', preview_html)
             self.assertIn('"top": {"yaw": 0.0, "pitch": 0.0, "roll": 0.0, "zoom": 0.82}', preview_html)
             self.assertIn('"front": {"yaw": -1.5707963267948966, "pitch": -1.5707963267948966, "roll": 0.0, "zoom": 0.82}', preview_html)
+            self.assertIn('drawAxesOverlay()', preview_html)
+            self.assertIn('drawAxisLine(origin, px, "#d64545", "X")', preview_html)
+            self.assertIn('drawAxisLine(origin, py, "#2f9e44", "Y")', preview_html)
+            self.assertIn('drawAxisLine(origin, pz, "#1c7ed6", "Z")', preview_html)
+            self.assertIn('applyPreset(preset.value || "isometric")', preview_html)
 
             with open(os.path.join(case_dir, "su2_case.cfg"), "r", encoding="utf-8") as handle:
                 config_text = handle.read()

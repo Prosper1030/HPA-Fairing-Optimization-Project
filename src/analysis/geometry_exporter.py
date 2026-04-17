@@ -200,17 +200,13 @@ def _write_preview_html(
     metrics: dict,
     path: Path,
 ) -> None:
-    bbox_center = [
-        sum(v[0] for v in vertices) / len(vertices),
-        sum(v[1] for v in vertices) / len(vertices),
-        sum(v[2] for v in vertices) / len(vertices),
-    ]
     x_extent = max(v[0] for v in vertices) - min(v[0] for v in vertices)
     y_extent = max(v[1] for v in vertices) - min(v[1] for v in vertices)
     z_extent = max(v[2] for v in vertices) - min(v[2] for v in vertices)
     extent = max(x_extent, y_extent, z_extent)
     payload = {
-        "vertices": [{"x": point[0] - bbox_center[0], "y": point[1] - bbox_center[1], "z": point[2] - bbox_center[2]} for point in vertices],
+        # vertices are already bbox-centered in _normalize_mesh; keep them in that frame
+        "vertices": [{"x": point[0], "y": point[1], "z": point[2]} for point in vertices],
         "faces": [{"a": a, "b": b, "c": c} for a, b, c in faces],
         "metrics": {k: float(v) if isinstance(v, (int, float)) else str(v) for k, v in metrics.items()},
     }
@@ -339,6 +335,7 @@ def _write_preview_html(
 
         ctx.fillStyle = "#444";
         ctx.fillText("Drag / Cd / Swet", 8, 18);
+        drawAxesOverlay();
       }}
 
       function applyPreset(choice) {{
@@ -350,6 +347,48 @@ def _write_preview_html(
         panX = 0.0;
         panY = 0.0;
         draw();
+      }}
+
+      function drawAxisLine(origin, axisPoint, color, label) {{
+        ctx.beginPath();
+        ctx.moveTo(origin[0], origin[1]);
+        ctx.lineTo(axisPoint[0], axisPoint[1]);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2.0;
+        ctx.globalAlpha = 1.0;
+        ctx.stroke();
+        ctx.fillStyle = color;
+        ctx.font = "12px Trebuchet MS, Arial, sans-serif";
+        ctx.fillText(label, axisPoint[0] + 6, axisPoint[1] - 4);
+      }}
+
+      function drawAxesOverlay() {{
+        const axisScale = Math.min(canvas.width, canvas.height) * 0.08;
+        const originModel = {{ x: 0.0, y: 0.0, z: 0.0 }};
+        const xModel = {{ x: axisScale / scaleBase, y: 0.0, z: 0.0 }};
+        const yModel = {{ x: 0.0, y: axisScale / scaleBase, z: 0.0 }};
+        const zModel = {{ x: 0.0, y: 0.0, z: axisScale / scaleBase }};
+        const origin = [92, canvas.height - 78];
+        const projectAxis = (point) => {{
+          const rotated = applyRotation(point);
+          return [
+            origin[0] + rotated[0] * scaleBase * 0.55,
+            origin[1] - rotated[1] * scaleBase * 0.55,
+          ];
+        }};
+        const px = projectAxis(xModel);
+        const py = projectAxis(yModel);
+        const pz = projectAxis(zModel);
+        ctx.fillStyle = "rgba(255,255,255,0.88)";
+        ctx.fillRect(16, canvas.height - 116, 150, 92);
+        ctx.strokeStyle = "rgba(40, 58, 78, 0.20)";
+        ctx.strokeRect(16, canvas.height - 116, 150, 92);
+        ctx.fillStyle = "#3f4b5c";
+        ctx.font = "12px Trebuchet MS, Arial, sans-serif";
+        ctx.fillText("Axes", 24, canvas.height - 96);
+        drawAxisLine(origin, px, "#d64545", "X");
+        drawAxisLine(origin, py, "#2f9e44", "Y");
+        drawAxisLine(origin, pz, "#1c7ed6", "Z");
       }}
 
       canvas.addEventListener("mousedown", (event) => {{
@@ -393,11 +432,10 @@ def _write_preview_html(
         const bounds = canvas.parentNode.getBoundingClientRect();
         canvas.width = Math.floor(bounds.width * 1.0);
         canvas.height = 560;
-        draw();
+        applyPreset(preset.value || "isometric");
       }};
       window.addEventListener("resize", updateSize);
       updateSize();
-      draw();
     </script>
   </body>
 </html>"""
