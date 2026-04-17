@@ -283,6 +283,15 @@ python scripts/prepare_su2_shortlist.py \
 python scripts/prepare_su2_shortlist.py \
   --best-gene output/hpa_run_xxx/logs/best_gene.json \
   --out output/su2_shortlist/best_case
+
+# 對已經有 mesh 的 shortlist 實際執行 SU2
+python scripts/run_su2_shortlist.py \
+  --shortlist-dir output/su2_shortlist/demo
+
+# 如果要用 MPI
+python scripts/run_su2_shortlist.py \
+  --shortlist-dir output/su2_shortlist/demo \
+  --ranks 4
 ```
 
 這個流程會為每個 case 產生：
@@ -291,6 +300,7 @@ python scripts/prepare_su2_shortlist.py \
 - `summary.json` / `summary.md`
 - `fairing_geometry.csv`
 - `su2_case.cfg`
+- `su2_runtime.cfg`
 - `PUT_MESH_HERE.txt`
 - `README.md`
 
@@ -304,14 +314,20 @@ python scripts/prepare_su2_shortlist.py \
 
 其中最適合先閱讀的是 `shortlist_report.md`，它會把 shortlist 的 proxy score、Drag、Cd、來源代數與建議重點整理成一份比較報告。
 
+如果你已經把 `.su2` mesh 放進各 case 資料夾，執行 `run_su2_shortlist.py` 後還會額外得到：
+
+- `su2_result.json` / `su2_result.md`：每個 case 的 SU2 結果
+- `su2_run_summary.json`
+- `su2_run_summary.md`
+
 目前的範圍是「準備可重現的 SU2 驗證工作包」：
 
 - 只對 shortlist 候選做驗證
 - 不進每代 GA 內圈
 - 不幫你自動建 mesh
-- 不直接替你啟動 SU2 求解
+- 但現在已經可以在 mesh 準備好後直接啟動 SU2 求解
 
-換句話說，它會把 proxy 基準、幾何表格與 SU2 starter config 都整理好，但最後的 meshing 與求解仍由你手動接上。
+換句話說，它會把 proxy 基準、幾何表格與 SU2 starter config 都整理好；你只要把 mesh 放進 case 資料夾，就能用 `run_su2_shortlist.py` 或 `run_all_su2_cases.sh` 跑出第一版高保真比較基準。
 
 ## 專案結構
 
@@ -324,6 +340,7 @@ HPA-Fairing-Optimization-Project/
 ├── scripts/
 │   ├── analyze_fairing.py
 │   ├── prepare_su2_shortlist.py
+│   ├── run_su2_shortlist.py
 │   ├── run_ga.py
 │   └── run_one_case.py
 ├── src/
@@ -364,6 +381,7 @@ python3 -m unittest \
   tests.test_fairing_analysis \
   tests.test_drag_proxy_metrics \
   tests.test_geometry_peak_position \
+  tests.test_project_manager_serialization \
   tests.test_run_ga_proxy
 ```
 
