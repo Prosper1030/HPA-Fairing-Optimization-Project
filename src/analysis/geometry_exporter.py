@@ -363,7 +363,7 @@ def _write_preview_html(
           ctx.lineTo(tri.p1[0], tri.p1[1]);
           ctx.lineTo(tri.p2[0], tri.p2[1]);
           ctx.closePath();
-          ctx.fillStyle = `rgb({{shade}}, {{Math.min(220, shade + 25)}}, 240)`;
+          ctx.fillStyle = `rgb(${{shade}}, ${{Math.min(220, shade + 25)}}, 240)`;
           ctx.globalAlpha = 0.95;
           ctx.fill();
         }}
