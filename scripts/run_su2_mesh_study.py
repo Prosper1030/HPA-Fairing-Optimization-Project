@@ -103,6 +103,18 @@ REFERENCE_READY_POLICY = {
     "mesh_delta_percent_max": 5.0,
 }
 
+REPRESENTATIVE_TAG_PRIORITY = (
+    "slender",
+    "short_fat",
+    "peak_forward",
+    "peak_aft",
+    "tail_aggressive",
+    "tail_conservative",
+    "mid_pack",
+)
+
+DEFAULT_REPRESENTATIVE_LIMIT = 8
+
 
 def _load_json(path: str | Path) -> dict:
     with open(path, "r", encoding="utf-8") as handle:
@@ -160,7 +172,52 @@ def _load_gene_dir_candidates(gene_dir: str | Path) -> list[dict]:
     return [_load_gene_candidate(gene_file) for gene_file in gene_files]
 
 
-def _load_batch_summary_candidates(batch_summary_path: str | Path, top: int | None) -> list[dict]:
+def _select_representative_ranked_cases(
+    ranked_cases: list[dict],
+    limit: int | None,
+) -> list[dict]:
+    if not ranked_cases:
+        return []
+
+    target_limit = limit if limit is not None else min(DEFAULT_REPRESENTATIVE_LIMIT, len(ranked_cases))
+    target_limit = max(1, min(target_limit, len(ranked_cases)))
+    selected: list[dict] = []
+    used_case_keys: set[tuple[str | None, str | None]] = set()
+
+    def case_key(entry: dict) -> tuple[str | None, str | None]:
+        return entry.get("GeneFile"), entry.get("CaseName")
+
+    def maybe_add(entry: dict, reason: str) -> bool:
+        key = case_key(entry)
+        if key in used_case_keys or len(selected) >= target_limit:
+            return False
+        enriched = dict(entry)
+        enriched["RepresentativeSelectionReason"] = reason
+        selected.append(enriched)
+        used_case_keys.add(key)
+        return True
+
+    for tag in REPRESENTATIVE_TAG_PRIORITY:
+        for entry in ranked_cases:
+            tags = entry.get("RepresentativeTags") or []
+            if tag in tags and maybe_add(entry, f"representative_tag:{tag}"):
+                break
+
+    for entry in ranked_cases:
+        if len(selected) >= target_limit:
+            break
+        maybe_add(entry, "rank_fill")
+
+    return selected
+
+
+def _load_batch_summary_candidates(
+    batch_summary_path: str | Path,
+    top: int | None,
+    *,
+    representative_study: bool = False,
+    representative_limit: int | None = None,
+) -> list[dict]:
     path = Path(batch_summary_path)
     if not path.exists():
         raise AnalysisInputError(f"找不到 batch_summary 檔案: {path}")
@@ -174,7 +231,12 @@ def _load_batch_summary_candidates(batch_summary_path: str | Path, top: int | No
     if not isinstance(ranked_cases, list):
         raise AnalysisInputError(f"batch_summary 缺少 RankedCases 陣列: {path}")
 
-    if top is not None:
+    if representative_study:
+        ranked_cases = _select_representative_ranked_cases(
+            ranked_cases,
+            representative_limit if representative_limit is not None else top,
+        )
+    elif top is not None:
         ranked_cases = ranked_cases[:top]
     if not ranked_cases:
         raise AnalysisInputError("batch_summary 沒有可用的成功案例")
@@ -193,6 +255,8 @@ def _load_batch_summary_candidates(batch_summary_path: str | Path, top: int | No
             "drag": entry.get("Drag"),
             "cd": entry.get("Cd"),
             "source_batch_summary": str(path),
+            "representative_tags": entry.get("RepresentativeTags", []),
+            "representative_selection_reason": entry.get("RepresentativeSelectionReason"),
         }
         candidates.append(candidate)
     return candidates
@@ -208,7 +272,14 @@ def _collect_candidates(args) -> list[dict]:
     for best_gene_path in args.best_gene:
         candidates.append(_load_best_gene_candidate(best_gene_path))
     for batch_summary_path in args.batch_summary:
-        candidates.extend(_load_batch_summary_candidates(batch_summary_path, args.top))
+        candidates.extend(
+            _load_batch_summary_candidates(
+                batch_summary_path,
+                args.top,
+                representative_study=args.representative_study,
+                representative_limit=args.representative_limit,
+            )
+        )
 
     if not candidates:
         raise AnalysisInputError(
@@ -474,6 +545,8 @@ def main() -> int:
     parser.add_argument("--best-gene", action="append", default=[], help="GA 產出的 best_gene.json，可重複提供")
     parser.add_argument("--batch-summary", action="append", default=[], help="analyze_fairing.py 產出的 batch_summary.json，可重複提供")
     parser.add_argument("--top", type=int, help="搭配 --batch-summary 使用，只取前 N 名")
+    parser.add_argument("--representative-study", action="store_true", help="搭配 --batch-summary 使用，自動從不同 representative tags 挑代表案例")
+    parser.add_argument("--representative-limit", type=int, help="搭配 --representative-study 使用，限制代表案例數量")
     parser.add_argument("--flow", help="流體條件 JSON 檔案路徑")
     parser.add_argument("--out", required=True, help="study 輸出目錄")
     parser.add_argument("--preset", choices=["none", "hpa"], help="限制 preset（預設讀 analysis_config）")
@@ -490,6 +563,10 @@ def main() -> int:
     flow_path = args.flow or os.path.join(project_root, "config", "fluid_conditions.json")
     if args.top is not None and args.top <= 0:
         parser.error("--top 必須是正整數")
+    if args.representative_limit is not None and args.representative_limit <= 0:
+        parser.error("--representative-limit 必須是正整數")
+    if args.representative_limit is not None and not args.representative_study:
+        parser.error("--representative-limit 需要搭配 --representative-study")
 
     try:
         candidates = _collect_candidates(args)

@@ -12,11 +12,65 @@ SRC_ROOT = os.path.join(PROJECT_ROOT, "src")
 SCRIPTS_ROOT = os.path.join(PROJECT_ROOT, "scripts")
 
 sys.path.insert(0, SRC_ROOT)
+sys.path.insert(0, SCRIPTS_ROOT)
 
 from analysis import get_example_gene
+import run_su2_mesh_study
 
 
 GMSH_AVAILABLE = importlib.util.find_spec("gmsh") is not None
+
+
+class TestRepresentativeSelection(unittest.TestCase):
+    def test_select_representative_ranked_cases_prefers_diverse_tags(self):
+        ranked_cases = [
+            {"Rank": 1, "CaseName": "best", "GeneFile": "/tmp/best.json", "RepresentativeTags": ["mid_pack"]},
+            {"Rank": 2, "CaseName": "slender", "GeneFile": "/tmp/slender.json", "RepresentativeTags": ["slender"]},
+            {"Rank": 3, "CaseName": "aft", "GeneFile": "/tmp/aft.json", "RepresentativeTags": ["peak_aft"]},
+            {"Rank": 4, "CaseName": "aggressive", "GeneFile": "/tmp/aggr.json", "RepresentativeTags": ["tail_aggressive"]},
+            {"Rank": 5, "CaseName": "fat", "GeneFile": "/tmp/fat.json", "RepresentativeTags": ["short_fat"]},
+        ]
+
+        selected = run_su2_mesh_study._select_representative_ranked_cases(ranked_cases, limit=4)
+
+        self.assertEqual([entry["CaseName"] for entry in selected], ["slender", "fat", "aft", "aggressive"])
+        self.assertEqual(selected[0]["RepresentativeSelectionReason"], "representative_tag:slender")
+        self.assertEqual(selected[3]["RepresentativeSelectionReason"], "representative_tag:tail_aggressive")
+
+    def test_load_batch_summary_candidates_can_use_representative_selection(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            gene_paths = {}
+            for name in ("best", "slender", "aft", "aggressive"):
+                gene_path = os.path.join(temp_dir, f"{name}.json")
+                with open(gene_path, "w", encoding="utf-8") as handle:
+                    json.dump(get_example_gene(), handle, indent=2, ensure_ascii=False)
+                gene_paths[name] = gene_path
+
+            batch_summary_path = os.path.join(temp_dir, "batch_summary.json")
+            with open(batch_summary_path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "RankedCases": [
+                            {"Rank": 1, "CaseName": "best", "GeneFile": gene_paths["best"], "RepresentativeTags": ["mid_pack"], "Drag": 1.0, "Cd": 0.10},
+                            {"Rank": 2, "CaseName": "slender", "GeneFile": gene_paths["slender"], "RepresentativeTags": ["slender"], "Drag": 1.1, "Cd": 0.11},
+                            {"Rank": 3, "CaseName": "aft", "GeneFile": gene_paths["aft"], "RepresentativeTags": ["peak_aft"], "Drag": 1.2, "Cd": 0.12},
+                            {"Rank": 4, "CaseName": "aggressive", "GeneFile": gene_paths["aggressive"], "RepresentativeTags": ["tail_aggressive"], "Drag": 1.3, "Cd": 0.13},
+                        ]
+                    },
+                    handle,
+                    indent=2,
+                    ensure_ascii=False,
+                )
+
+            candidates = run_su2_mesh_study._load_batch_summary_candidates(
+                batch_summary_path,
+                top=None,
+                representative_study=True,
+                representative_limit=3,
+            )
+
+            self.assertEqual([entry["name"] for entry in candidates], ["slender", "aft", "aggressive"])
+            self.assertEqual(candidates[0]["Notes"]["representative_selection_reason"], "representative_tag:slender")
 
 
 @unittest.skipUnless(GMSH_AVAILABLE, "gmsh not installed")
