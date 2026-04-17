@@ -6,3 +6,5 @@ scipy
 pymoo
 matplotlib
 triangle
+gmsh
+meshio

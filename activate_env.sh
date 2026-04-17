@@ -161,7 +161,7 @@ _hpa_install_requirements_if_needed() {
     [ -f "$requirements_file" ] || return 0
 
     missing_modules=""
-    for module_name in numpy scipy pymoo matplotlib triangle; do
+    for module_name in numpy scipy pymoo matplotlib triangle gmsh meshio; do
         if ! _hpa_python_has_module "$module_name"; then
             missing_modules="$missing_modules $module_name"
         fi

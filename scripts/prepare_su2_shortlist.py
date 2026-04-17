@@ -152,9 +152,9 @@ def main() -> int:
     parser.add_argument("--backend", choices=["su2"], default="su2", help="高保真 backend（目前只支援 su2）")
     parser.add_argument(
         "--mesh-mode",
-        choices=["manual_3d", "axisymmetric_2d"],
+        choices=["manual_3d", "axisymmetric_2d", "gmsh_3d"],
         default="manual_3d",
-        help="mesh 準備模式：manual_3d 只出工作包；axisymmetric_2d 會自動產生可跑的 benchmark mesh",
+        help="mesh 準備模式：manual_3d 只出工作包；axisymmetric_2d / gmsh_3d 會自動產生可跑的 benchmark mesh",
     )
     parser.add_argument("--fill-missing-from-example", action="store_true", help="若 gene 缺欄位，使用範例 gene 預設值補齊")
     args = parser.parse_args()

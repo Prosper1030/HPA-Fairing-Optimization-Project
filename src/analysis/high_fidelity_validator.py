@@ -31,6 +31,7 @@ from analysis.fairing_analysis import (
     write_analysis_report_bundle,
 )
 from analysis.su2_axisymmetric_mesh import generate_axisymmetric_mesh
+from analysis.su2_gmsh_3d_mesh import generate_gmsh_3d_mesh
 
 
 DEFAULT_SU2_SETTINGS = {
@@ -64,6 +65,15 @@ AXISYMMETRIC_BENCHMARK_SU2_SETTINGS = {
     "conv_startiter": 30,
     "conv_cauchy_elems": 25,
     "conv_cauchy_eps": 5e-6,
+}
+
+GMSH_3D_BENCHMARK_SU2_SETTINGS = {
+    "iterations": 180,
+    "inner_iterations": 180,
+    "cfl": 3.0,
+    "conv_startiter": 25,
+    "conv_cauchy_elems": 20,
+    "conv_cauchy_eps": 1e-5,
 }
 
 SU2_DOC_LINKS = {
@@ -227,6 +237,8 @@ def _resolve_su2_settings(mesh_mode: str, su2_settings: Mapping | None = None) -
     resolved_settings = dict(DEFAULT_SU2_SETTINGS)
     if mesh_mode == "axisymmetric_2d":
         resolved_settings.update(AXISYMMETRIC_BENCHMARK_SU2_SETTINGS)
+    elif mesh_mode == "gmsh_3d":
+        resolved_settings.update(GMSH_3D_BENCHMARK_SU2_SETTINGS)
     if su2_settings:
         resolved_settings.update(dict(su2_settings))
     resolved_settings["mesh_mode"] = mesh_mode
@@ -475,8 +487,10 @@ def _build_case_readme(case_name: str, case_entry: dict, su2_settings: dict) -> 
         "- `PUT_MESH_HERE.txt`: mesh 與 marker 命名提醒",
         "",
     ]
-    if case_entry.get("MeshMode") == "axisymmetric_2d":
+    if case_entry.get("MeshMode") in {"axisymmetric_2d", "gmsh_3d"}:
         included_files.insert(-2, "- `mesh_metadata.json`: 自動生 mesh 時的邊界與解析度摘要")
+    if case_entry.get("MeshMode") == "gmsh_3d":
+        included_files.insert(-2, "- `fairing_mesh.msh`: Gmsh 原生 mesh，方便除錯與再轉檔")
 
     lines = [
         *included_files,
@@ -581,7 +595,11 @@ def _build_manifest_markdown(manifest: dict) -> str:
             (
                 "1. `axisymmetric_2d` cases 已附帶可直接執行的 benchmark mesh；`manual_3d` case 仍需自行建 mesh。"
                 if manifest.get("MeshMode") == "axisymmetric_2d"
-                else "1. Mesh each shortlisted case into SU2 `.su2` format."
+                else (
+                    "1. `gmsh_3d` cases 已自動產生可直接執行的 3D benchmark mesh，可先拿來建立 SU2 基準。"
+                    if manifest.get("MeshMode") == "gmsh_3d"
+                    else "1. Mesh each shortlisted case into SU2 `.su2` format."
+                )
             ),
             "2. Keep the wall marker name and far-field marker name consistent with each case config.",
             "3. Run `./run_all_su2_cases.sh` after SU2 is installed and meshes are ready.",
@@ -990,7 +1008,7 @@ def prepare_shortlist_validation_package(
 ) -> dict:
     if backend != "su2":
         raise ValueError(f"Unsupported high-fidelity backend: {backend}")
-    if mesh_mode not in {"manual_3d", "axisymmetric_2d"}:
+    if mesh_mode not in {"manual_3d", "axisymmetric_2d", "gmsh_3d"}:
         raise ValueError(f"Unsupported mesh_mode: {mesh_mode}")
 
     candidate_list = [_candidate_to_mapping(candidate) for candidate in candidates]
@@ -1045,13 +1063,23 @@ def prepare_shortlist_validation_package(
                 case_dir / resolved_settings["mesh_filename"],
                 options=dict(mesh_options or {}),
             )
+        elif mesh_mode == "gmsh_3d":
+            mesh_metadata = generate_gmsh_3d_mesh(
+                analysis["Curves"],
+                case_dir / resolved_settings["mesh_filename"],
+                options=dict(mesh_options or {}),
+            )
         (case_dir / "PUT_MESH_HERE.txt").write_text(
             "\n".join(
                 [
                     (
                         "An axisymmetric benchmark mesh was auto-generated as `fairing_mesh.su2`."
                         if mesh_mode == "axisymmetric_2d"
-                        else "Place your final SU2 mesh here as `fairing_mesh.su2`."
+                        else (
+                            "A Gmsh-generated 3D benchmark mesh was auto-generated as `fairing_mesh.su2`."
+                            if mesh_mode == "gmsh_3d"
+                            else "Place your final SU2 mesh here as `fairing_mesh.su2`."
+                        )
                     ),
                     f"Required wall marker: {resolved_settings['marker_wall']}",
                     f"Required far-field marker: {resolved_settings['marker_far']}",
@@ -1082,8 +1110,9 @@ def prepare_shortlist_validation_package(
                 "geometry_csv": str(case_dir / "fairing_geometry.csv"),
                 "su2_config": str(su2_config_path),
                 "su2_runtime_config": str(runtime_config_path),
-                "mesh_su2": str(case_dir / resolved_settings["mesh_filename"]) if mesh_mode == "axisymmetric_2d" else None,
-                "mesh_metadata_json": str(mesh_metadata_path) if mesh_mode == "axisymmetric_2d" else None,
+                "mesh_su2": str(case_dir / resolved_settings["mesh_filename"]) if mesh_mode in {"axisymmetric_2d", "gmsh_3d"} else None,
+                "mesh_metadata_json": str(mesh_metadata_path) if mesh_mode in {"axisymmetric_2d", "gmsh_3d"} else None,
+                "mesh_msh": str(case_dir / "fairing_mesh.msh") if mesh_mode == "gmsh_3d" else None,
                 "mesh_placeholder": str(case_dir / "PUT_MESH_HERE.txt"),
             },
         }
