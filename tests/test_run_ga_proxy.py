@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 import unittest
 
 
@@ -26,6 +27,24 @@ else:
 
 @unittest.skipUnless(run_ga is not None and PYMOO_SPEC is not None, "run_ga / pymoo unavailable")
 class TestRunGaProxy(unittest.TestCase):
+    def test_plot_convergence_uses_writable_cache(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "convergence.png")
+            cache_root = os.path.join(temp_dir, "cache")
+
+            run_ga.plot_convergence(
+                [
+                    {"generation": 1, "best_fitness": 1.8, "avg_fitness": 2.1},
+                    {"generation": 2, "best_fitness": 1.6, "avg_fitness": 1.9},
+                ],
+                output_path,
+                cache_root=cache_root,
+            )
+
+            self.assertTrue(os.path.exists(output_path))
+            self.assertTrue(os.path.isdir(os.path.join(cache_root, "matplotlib")))
+            self.assertTrue(os.path.isdir(os.path.join(cache_root, "fontconfig")))
+
     def test_run_ga_proxy_smoke_saves_analysis_summary(self):
         args = argparse.Namespace(
             gen=1,

@@ -48,9 +48,22 @@ def load_fluid_conditions(fluid_path: str) -> dict:
         return json.load(f)
 
 
-def plot_convergence(history: list, output_path: str):
+def _ensure_plot_cache(cache_root: str | Path) -> Path:
+    root = Path(cache_root)
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "matplotlib").mkdir(parents=True, exist_ok=True)
+    (root / "fontconfig").mkdir(parents=True, exist_ok=True)
+    os.environ["MPLCONFIGDIR"] = str(root / "matplotlib")
+    os.environ["XDG_CACHE_HOME"] = str(root)
+    return root
+
+
+def plot_convergence(history: list, output_path: str, *, cache_root: str | Path | None = None):
     """繪製收斂曲線"""
     try:
+        if cache_root is not None:
+            _ensure_plot_cache(cache_root)
+
         import matplotlib.pyplot as plt
 
         generations = [h['generation'] for h in history]
@@ -80,6 +93,8 @@ def plot_convergence(history: list, output_path: str):
 
     except ImportError:
         print("Warning: matplotlib 未安裝，跳過收斂曲線繪製")
+    except Exception as exc:
+        print(f"Warning: 收斂曲線繪製失敗，已跳過: {exc}")
 
 
 def resolve_checkpoint_path(path_str: str) -> Path:
@@ -388,6 +403,7 @@ def run_optimization(args):
         base_output_dir="output",
         existing_run_dir=checkpoint.get('run_dir') if checkpoint else None,
     )
+    plot_cache_dir = pm.run_dir / ".plot_cache"
     if checkpoint:
         pm.log(f"從 checkpoint 續跑: {checkpoint['checkpoint_path']}")
     pm.log(f"開始 GA 優化: 最多 {n_gen} 代, 族群大小 {pop_size}, {n_workers} 進程")
@@ -515,7 +531,11 @@ def run_optimization(args):
 
             # 每5代保存一次收斂曲線
             if self.n_gen % 5 == 0 and convergence_history:
-                plot_convergence(convergence_history, str(pm.log_dir / 'convergence.png'))
+                plot_convergence(
+                    convergence_history,
+                    str(pm.log_dir / 'convergence.png'),
+                    cache_root=plot_cache_dir,
+                )
 
                 # 保存收斂歷史
                 with open(pm.log_dir / 'convergence_history.json', 'w', encoding='utf-8') as f:
@@ -612,7 +632,11 @@ def run_optimization(args):
 
     # 繪製最終收斂曲線
     if convergence_history:
-        plot_convergence(convergence_history, str(pm.log_dir / 'convergence.png'))
+        plot_convergence(
+            convergence_history,
+            str(pm.log_dir / 'convergence.png'),
+            cache_root=plot_cache_dir,
+        )
 
     export_final_vsp = bool(args.final_vsp or config.get('output', {}).get('export_final_vsp', False))
     if args.skip_final_vsp:
