@@ -39,6 +39,9 @@ class ProxyMetrics:
     bottom_tail_angle_deg: float
     side_tail_angle_deg: float
     area_non_monotonicity: float
+    forebody_burden: float
+    forebody_curvature: float
+    recovery_burden: float
     recovery_curvature: float
 
 
@@ -61,10 +64,13 @@ class FairingDragProxy:
         self.q = 0.5 * self.rho * (self.velocity ** 2)
 
     @staticmethod
-    def _section_exponents(curves: dict) -> tuple[float, float]:
-        top_exp = 0.5 * (float(curves.get("M_top", 2.5)) + float(curves.get("N_top", 2.5)))
-        bot_exp = 0.5 * (float(curves.get("M_bot", 2.5)) + float(curves.get("N_bot", 2.5)))
-        return max(top_exp, 1.2), max(bot_exp, 1.2)
+    def _section_exponents(curves: dict) -> tuple[float, float, float, float]:
+        return (
+            max(float(curves.get("M_top", 2.5)), 1.2),
+            max(float(curves.get("N_top", 2.5)), 1.2),
+            max(float(curves.get("M_bot", 2.5)), 1.2),
+            max(float(curves.get("N_bot", 2.5)), 1.2),
+        )
 
     @staticmethod
     def _build_section_points(
@@ -72,8 +78,10 @@ class FairingDragProxy:
         width_half: float,
         total_height: float,
         z_center: float,
-        top_exp: float,
-        bot_exp: float,
+        top_y_exp: float,
+        top_z_exp: float,
+        bot_y_exp: float,
+        bot_z_exp: float,
         n_points: int,
     ) -> np.ndarray:
         if width_half <= 1e-9 or total_height <= 1e-9:
@@ -91,13 +99,12 @@ class FairingDragProxy:
             # Use the upper-half exponent on the nose-top side and the
             # lower-half exponent on the underside. This keeps the proxy
             # aligned with how the current geometry exposes shape control.
-            exp_use = top_exp if 0.0 <= theta <= pi else bot_exp
-            y_value = width_half * np.sign(cos_val) * (abs(cos_val) ** (2.0 / exp_use))
-
             if 0.0 <= theta <= pi:
-                z_local = half_height * (abs(sin_val) ** (2.0 / top_exp))
+                y_value = width_half * np.sign(cos_val) * (abs(cos_val) ** (2.0 / top_y_exp))
+                z_local = half_height * (abs(sin_val) ** (2.0 / top_z_exp))
             else:
-                z_local = -half_height * (abs(sin_val) ** (2.0 / bot_exp))
+                y_value = width_half * np.sign(cos_val) * (abs(cos_val) ** (2.0 / bot_y_exp))
+                z_local = -half_height * (abs(sin_val) ** (2.0 / bot_z_exp))
 
             points[idx] = [x_value, y_value, z_center + z_local]
 
@@ -142,23 +149,68 @@ class FairingDragProxy:
         return float(np.percentile(np.degrees(np.arctan(positive)), percentile))
 
     @staticmethod
-    def _recovery_curvature(
-        x_coords: np.ndarray,
-        width_half: np.ndarray,
-        z_upper: np.ndarray,
-        z_lower: np.ndarray,
-        aft_mask: np.ndarray,
+    def _normalized_interval_average(
+        x_dimless: np.ndarray,
+        values: np.ndarray,
     ) -> float:
-        x_aft = x_coords[aft_mask]
-        if len(x_aft) < 4:
+        if len(x_dimless) < 2:
+            return 0.0
+        span = float(x_dimless[-1] - x_dimless[0])
+        if span <= 1e-12:
+            return float(np.mean(values))
+        return float(np.trapezoid(values, x_dimless) / span)
+
+    @classmethod
+    def _slope_exceedance_burden(
+        cls,
+        x_dimless: np.ndarray,
+        slope_components: list[np.ndarray],
+        angle_refs_deg: list[float],
+        weights: list[float],
+    ) -> float:
+        if len(x_dimless) < 2:
             return 0.0
 
-        side_ddx = np.gradient(np.gradient(width_half[aft_mask], x_aft), x_aft)
-        top_ddx = np.gradient(np.gradient(z_upper[aft_mask], x_aft), x_aft)
-        bot_ddx = np.gradient(np.gradient(z_lower[aft_mask], x_aft), x_aft)
+        burden = np.zeros_like(x_dimless, dtype=float)
+        for slopes, angle_ref_deg, weight in zip(slope_components, angle_refs_deg, weights):
+            tan_ref = max(np.tan(np.radians(angle_ref_deg)), 1e-9)
+            exceedance = np.maximum(slopes / tan_ref - 1.0, 0.0) ** 2
+            burden += float(weight) * exceedance
+        return cls._normalized_interval_average(x_dimless, burden)
 
+    @classmethod
+    def _curvature_burden(
+        cls,
+        x_dimless: np.ndarray,
+        width_norm: np.ndarray,
+        z_upper_norm: np.ndarray,
+        z_lower_norm: np.ndarray,
+        mask: np.ndarray,
+    ) -> float:
+        x_masked = x_dimless[mask]
+        if len(x_masked) < 4:
+            return 0.0
+
+        side_ddx = np.gradient(np.gradient(width_norm[mask], x_masked), x_masked)
+        top_ddx = np.gradient(np.gradient(z_upper_norm[mask], x_masked), x_masked)
+        bot_ddx = np.gradient(np.gradient(z_lower_norm[mask], x_masked), x_masked)
+        curvature_load = np.abs(side_ddx) + np.abs(top_ddx) + np.abs(bot_ddx)
+        return cls._normalized_interval_average(x_masked, curvature_load)
+
+    @classmethod
+    def _area_regrowth_burden(
+        cls,
+        x_dimless: np.ndarray,
+        area_norm: np.ndarray,
+        start_index: int,
+    ) -> float:
+        x_aft = x_dimless[start_index:]
+        area_aft = area_norm[start_index:]
+        if len(x_aft) < 3:
+            return 0.0
+        darea_dx = np.gradient(area_aft, x_aft)
         return float(
-            np.percentile(np.abs(side_ddx) + np.abs(top_ddx) + np.abs(bot_ddx), 90)
+            np.trapezoid(np.maximum(darea_dx, 0.0), x_aft)
         )
 
     def extract_metrics(self, curves: dict, profile_points: int = 72) -> ProxyMetrics:
@@ -170,7 +222,7 @@ class FairingDragProxy:
         z_lower = np.asarray(curves["z_lower"], dtype=float)
         body_length = float(curves["L"])
 
-        top_exp, bot_exp = self._section_exponents(curves)
+        top_y_exp, top_z_exp, bot_y_exp, bot_z_exp = self._section_exponents(curves)
 
         section_points = [
             self._build_section_points(
@@ -178,8 +230,10 @@ class FairingDragProxy:
                 width_half[i],
                 total_height[i],
                 z_center[i],
-                top_exp,
-                bot_exp,
+                top_y_exp,
+                top_z_exp,
+                bot_y_exp,
+                bot_z_exp,
                 profile_points,
             )
             for i in range(len(x_coords))
@@ -193,6 +247,10 @@ class FairingDragProxy:
         eq_diameter = 2.0 * np.sqrt(max(max_area, 1e-12) / pi)
         fineness_ratio = body_length / max(eq_diameter, 1e-9)
         reynolds_number = self.rho * self.velocity * body_length / max(self.mu, 1e-12)
+        x_dimless = x_coords / max(body_length, 1e-9)
+        width_norm = width_half / max(eq_diameter, 1e-9)
+        z_upper_norm = z_upper / max(eq_diameter, 1e-9)
+        z_lower_norm = z_lower / max(eq_diameter, 1e-9)
 
         significance_mask = section_areas >= (0.08 * max(max_area, 1e-12))
         if int(np.count_nonzero(significance_mask)) < 6:
@@ -220,12 +278,46 @@ class FairingDragProxy:
         bottom_tail_angle_deg = self._positive_percentile(dz_lower_dx[aft_mask])
         side_tail_angle_deg = self._positive_percentile(-dwidth_dx[aft_mask])
 
-        area_after_peak = section_areas[max_area_index:]
-        positive_re_growth = np.maximum(np.diff(area_after_peak), 0.0).sum()
-        area_non_monotonicity = float(positive_re_growth / max(max_area, 1e-12))
+        area_norm = section_areas / max(max_area, 1e-12)
+        area_non_monotonicity = self._area_regrowth_burden(
+            x_dimless,
+            area_norm,
+            max_area_index,
+        )
 
-        recovery_curvature = self._recovery_curvature(
-            x_coords, width_half, z_upper, z_lower, aft_mask
+        forebody_burden = self._slope_exceedance_burden(
+            x_dimless[nose_mask],
+            [
+                np.maximum(dwidth_dx[nose_mask], 0.0),
+                np.maximum(dz_upper_dx[nose_mask], 0.0),
+                np.maximum(-dz_lower_dx[nose_mask], 0.0),
+            ],
+            [30.0, 30.0, 30.0],
+            [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0],
+        )
+        recovery_burden = self._slope_exceedance_burden(
+            x_dimless[aft_mask],
+            [
+                np.maximum(-dz_upper_dx[aft_mask], 0.0),
+                np.maximum(dz_lower_dx[aft_mask], 0.0),
+                np.maximum(-dwidth_dx[aft_mask], 0.0),
+            ],
+            [18.0, 14.0, 13.0],
+            [0.40, 0.35, 0.25],
+        )
+        forebody_curvature = self._curvature_burden(
+            x_dimless,
+            width_norm,
+            z_upper_norm,
+            z_lower_norm,
+            nose_mask,
+        )
+        recovery_curvature = self._curvature_burden(
+            x_dimless,
+            width_norm,
+            z_upper_norm,
+            z_lower_norm,
+            aft_mask,
         )
 
         return ProxyMetrics(
@@ -241,6 +333,9 @@ class FairingDragProxy:
             bottom_tail_angle_deg=float(bottom_tail_angle_deg),
             side_tail_angle_deg=float(side_tail_angle_deg),
             area_non_monotonicity=float(area_non_monotonicity),
+            forebody_burden=float(forebody_burden),
+            forebody_curvature=float(forebody_curvature),
+            recovery_burden=float(recovery_burden),
             recovery_curvature=float(recovery_curvature),
         )
 
@@ -252,34 +347,32 @@ class FairingDragProxy:
     def _cf_turbulent(reynolds_number: float) -> float:
         return 0.074 / (max(reynolds_number, 1.0) ** 0.2)
 
+    @staticmethod
+    def _sigmoid(value: float) -> float:
+        return float(1.0 / (1.0 + np.exp(-value)))
+
     def estimate_laminar_fraction(self, metrics: ProxyMetrics) -> float:
-        peak_quality = np.exp(-((metrics.x_peak_area_frac - 0.34) / 0.12) ** 2)
-        recovery_length_quality = np.exp(-((metrics.recovery_length_ratio - 0.62) / 0.22) ** 2)
-        nose_quality = np.exp(-(max(0.0, metrics.nose_angle_deg - 30.0) / 18.0) ** 2)
+        # Interpret "laminar fraction" as a transition-location surrogate:
+        # the approximate fraction of body length that can remain laminar before
+        # transition, driven mainly by forebody loading and smoothness rather
+        # than by aft-body separation features.
+        x_t_min = 0.05
+        x_t_max = 0.70
+        x_peak_ref = 0.35
+        low_fineness = max(0.0, 2.8 - metrics.fineness_ratio)
+        peak_alignment = np.exp(-((metrics.x_peak_area_frac - x_peak_ref) / 0.12) ** 2)
+        aft_peak_penalty = max(0.0, metrics.x_peak_area_frac - 0.33)
 
-        top_quality = np.exp(-(max(0.0, metrics.top_tail_angle_deg - 18.0) / 14.0) ** 2)
-        bottom_quality = np.exp(-(max(0.0, metrics.bottom_tail_angle_deg - 14.0) / 11.0) ** 2)
-        side_quality = np.exp(-(max(0.0, metrics.side_tail_angle_deg - 13.0) / 8.0) ** 2)
-        recovery_quality = 0.40 * top_quality + 0.35 * bottom_quality + 0.25 * side_quality
-
-        monotonic_quality = np.exp(-10.0 * metrics.area_non_monotonicity)
-        curvature_quality = np.exp(-0.006 * metrics.recovery_curvature)
-
-        quality_score = (
-            0.20 * peak_quality
-            + 0.18 * recovery_length_quality
-            + 0.12 * nose_quality
-            + 0.26 * recovery_quality
-            + 0.14 * monotonic_quality
-            + 0.10 * curvature_quality
+        transition_argument = (
+            0.15
+            + 2.20 * peak_alignment
+            - 0.55 * metrics.forebody_burden
+            - 0.02 * metrics.forebody_curvature
+            - 0.25 * low_fineness
+            - 4.50 * aft_peak_penalty
         )
-        separation_guard = np.exp(
-            -((max(0.0, metrics.top_tail_angle_deg - 32.0) / 10.0) ** 2)
-            -((max(0.0, metrics.bottom_tail_angle_deg - 22.0) / 8.0) ** 2)
-            -((max(0.0, metrics.side_tail_angle_deg - 14.0) / 5.0) ** 2)
-        )
-        laminar_fraction = (0.08 + 0.40 * quality_score) * (0.82 + 0.18 * separation_guard)
-        return float(np.clip(laminar_fraction, 0.08, 0.55))
+        laminar_fraction = x_t_min + (x_t_max - x_t_min) * self._sigmoid(transition_argument)
+        return float(np.clip(laminar_fraction, x_t_min, x_t_max))
 
     def estimate_skin_friction_cf(self, metrics: ProxyMetrics, laminar_fraction: float) -> float:
         re_total = metrics.reynolds_number
@@ -301,39 +394,30 @@ class FairingDragProxy:
         return float(1.0 + 1.5 / (fr ** 1.5) + 7.0 / (fr ** 3.0))
 
     def estimate_pressure_cd(self, metrics: ProxyMetrics, laminar_fraction: float) -> tuple[float, float]:
-        top_excess = max(0.0, metrics.top_tail_angle_deg - 18.0)
-        bottom_excess = max(0.0, metrics.bottom_tail_angle_deg - 14.0)
-        side_excess = max(0.0, metrics.side_tail_angle_deg - 13.0)
-        curvature_excess = max(0.0, metrics.recovery_curvature - 4.0)
-        peak_shift = max(0.0, metrics.x_peak_area_frac - 0.45) + max(0.0, 0.22 - metrics.x_peak_area_frac)
-        low_fineness = max(0.0, 3.2 - metrics.fineness_ratio)
-        low_laminar = max(0.0, 0.38 - laminar_fraction)
+        peak_shift = max(0.0, metrics.x_peak_area_frac - 0.50) + max(0.0, 0.18 - metrics.x_peak_area_frac)
+        low_fineness = max(0.0, 2.8 - metrics.fineness_ratio)
+        curvature_excess = max(0.0, metrics.recovery_curvature - 18.0)
+        recovery_span = max(metrics.recovery_length_ratio, 1e-6)
+        transition_into_tail = max(0.0, (laminar_fraction - metrics.x_peak_area_frac) / recovery_span)
+        tail_transition_multiplier = 1.0 + 0.85 * transition_into_tail
 
-        # The SU2 3D boundary-layer benchmark suggests that the v2 penalty was
-        # too aggressive in absolute magnitude for otherwise smooth streamlined
-        # tails. Keep the same qualitative drivers, but scale the penalty toward
-        # a preliminary-design correlation instead of a worst-case guardrail.
-        base_penalty = (
-            3.0e-5 * (top_excess ** 2)
-            + 5.0e-5 * (bottom_excess ** 2)
-            + 1.5e-5 * (side_excess ** 2)
-            + 0.006 * metrics.area_non_monotonicity
-            + 7.5e-6 * (curvature_excess ** 2)
-            + 0.006 * (peak_shift ** 2)
-            + 0.008 * (low_fineness ** 2)
-            + 0.006 * (low_laminar ** 2)
+        pressure_load = (
+            0.0200 * tail_transition_multiplier * metrics.recovery_burden
+            + 0.0250 * metrics.area_non_monotonicity
+            + 0.0012 * curvature_excess
+            + 0.0050 * (peak_shift ** 2)
+            + 0.0030 * (low_fineness ** 2)
         )
 
-        pressure_cd = float(base_penalty * (metrics.max_area / max(self.s_ref, 1e-9)))
-        pressure_risk = _clip01(
-            0.015 * top_excess
-            + 0.022 * bottom_excess
-            + 0.010 * side_excess
-            + 0.20 * low_fineness
-            + 0.55 * low_laminar
-            + 1.50 * metrics.area_non_monotonicity
-            + 0.10 * peak_shift
+        pressure_cd = float(pressure_load * (metrics.max_area / max(self.s_ref, 1e-9)))
+        risk_load = (
+            1.6 * tail_transition_multiplier * metrics.recovery_burden
+            + 6.0 * metrics.area_non_monotonicity
+            + 0.12 * curvature_excess
+            + 1.2 * peak_shift
+            + 0.8 * low_fineness
         )
+        pressure_risk = _clip01(1.0 - np.exp(-risk_load))
         return pressure_cd, float(pressure_risk)
 
     def evaluate_curves(self, curves: dict) -> dict:
@@ -355,6 +439,7 @@ class FairingDragProxy:
             "Cf": float(cf_mix),
             "FF": float(form_factor),
             "LaminarFraction": float(laminar_fraction),
+            "TransitionFraction": float(laminar_fraction),
             "FinenessRatio": float(metrics.fineness_ratio),
             "XPeakAreaFrac": float(metrics.x_peak_area_frac),
             "TailAngles": {
@@ -364,8 +449,11 @@ class FairingDragProxy:
             },
             "Quality": {
                 "area_monotonicity": float(1.0 - _clip01(metrics.area_non_monotonicity)),
+                "forebody_burden": float(metrics.forebody_burden),
+                "forebody_curvature": float(metrics.forebody_curvature),
+                "recovery_burden": float(metrics.recovery_burden),
                 "recovery_curvature": float(metrics.recovery_curvature),
                 "pressure_risk": float(pressure_risk),
             },
-            "Model": "fast_drag_proxy_v3",
+            "Model": "fast_drag_proxy_v5",
         }
