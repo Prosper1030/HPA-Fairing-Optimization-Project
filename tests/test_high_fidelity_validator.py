@@ -163,6 +163,35 @@ class TestHighFidelityValidator(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(case_dir, "su2_result.json")))
             self.assertTrue(os.path.exists(os.path.join(case_dir, "su2_result.md")))
 
+    def test_run_prepared_su2_case_parses_real_su2_uppercase_history_columns(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest = prepare_shortlist_validation_package(
+                [{"name": "alpha", "gene": self.example_gene}],
+                output_dir=temp_dir,
+            )
+            case_dir = manifest["Cases"][0]["CaseDir"]
+            mesh_path = os.path.join(case_dir, "fairing_mesh.su2")
+            with open(mesh_path, "w", encoding="utf-8") as handle:
+                handle.write("NDIME= 3\nNELEM= 0\nNPOIN= 0\nNMARK= 0\n")
+
+            solver_path = os.path.join(temp_dir, "fake_su2_uppercase.sh")
+            with open(solver_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "#!/bin/sh\n"
+                    "cat > history.csv <<'EOF'\n"
+                    "\"Time_Iter\",\"Outer_Iter\",\"Inner_Iter\",\"CD\",\"CFx\"\n"
+                    "0,0,49,0.172186,0.402861\n"
+                    "EOF\n"
+                )
+            os.chmod(solver_path, 0o755)
+
+            result = run_prepared_su2_case(case_dir, solver_command=solver_path)
+
+            self.assertEqual(result["Status"], "completed")
+            self.assertAlmostEqual(result["Cd"], 0.172186, places=6)
+            self.assertAlmostEqual(result["ForceX"], 0.402861, places=6)
+            self.assertAlmostEqual(result["Drag"], 4.45585083125, places=6)
+
     def test_run_prepared_su2_case_accepts_solver_path_with_spaces(self):
         with tempfile.TemporaryDirectory(prefix="su2 solver test ") as temp_dir:
             manifest = prepare_shortlist_validation_package(

@@ -821,8 +821,8 @@ def run_prepared_su2_case(
     if not rows:
         raise SU2ExecutionError(f"history 檔案沒有資料列: {history_path}")
     last_row = rows[-1]
-    cd = _lookup_metric(last_row, "DRAG")
-    force_x = _lookup_metric(last_row, "FORCE_X")
+    cd = _lookup_metric(last_row, "DRAG", "CD", "CFX")
+    force_x = _lookup_metric(last_row, "FORCE_X", "CFX")
     iter_value = _lookup_metric(last_row, "ITER", "INNER_ITER", "OUTER_ITER")
 
     summary_json_path = case_path / "summary.json"
