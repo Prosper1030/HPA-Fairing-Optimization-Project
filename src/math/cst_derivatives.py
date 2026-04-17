@@ -230,60 +230,6 @@ class CSTDerivatives:
         }
 
     @staticmethod
-    def curve_slope(x_array, y_array, index):
-        """
-        在非等距節點上估計一維曲線斜率 dy/dx。
-
-        端點使用一階前/後差分；中間點使用局部二次多項式擬合，
-        避免把等距節點的中心差分公式硬套到 cosine spacing。
-        """
-        n = len(x_array)
-        if n < 2:
-            return 0.0
-
-        if index <= 0:
-            dx = x_array[1] - x_array[0]
-            return 0.0 if abs(dx) <= 1e-12 else (y_array[1] - y_array[0]) / dx
-
-        if index >= n - 1:
-            dx = x_array[-1] - x_array[-2]
-            return 0.0 if abs(dx) <= 1e-12 else (y_array[-1] - y_array[-2]) / dx
-
-        h_s = x_array[index] - x_array[index - 1]
-        h_d = x_array[index + 1] - x_array[index]
-        if abs(h_s) <= 1e-12 or abs(h_d) <= 1e-12 or abs(h_s + h_d) <= 1e-12:
-            dx = x_array[index + 1] - x_array[index - 1]
-            return 0.0 if abs(dx) <= 1e-12 else (y_array[index + 1] - y_array[index - 1]) / dx
-
-        return (
-            (h_s ** 2) * y_array[index + 1]
-            + ((h_d ** 2) - (h_s ** 2)) * y_array[index]
-            - (h_d ** 2) * y_array[index - 1]
-        ) / (h_s * h_d * (h_d + h_s))
-
-    @staticmethod
-    def curve_tangent_angle(x_array, y_array, index, flip_sign=False):
-        """從離散曲線斜率換算切線角。"""
-        slope = CSTDerivatives.curve_slope(x_array, y_array, index)
-        angle = math.degrees(math.atan(slope))
-        return -angle if flip_sign else angle
-
-    @staticmethod
-    def compute_tangent_angles_for_curves(x_array, width_array, z_upper_array, z_lower_array, index):
-        """
-        從實際離散曲線直接計算截面四向切線角。
-        """
-        angle_width = CSTDerivatives.curve_tangent_angle(x_array, width_array, index)
-        angle_top = CSTDerivatives.curve_tangent_angle(x_array, z_upper_array, index)
-        angle_bottom = CSTDerivatives.curve_tangent_angle(x_array, z_lower_array, index, flip_sign=True)
-        return {
-            'right': angle_width,
-            'left': angle_width,
-            'top': angle_top,
-            'bottom': angle_bottom,
-        }
-
-    @staticmethod
     def compute_asymmetric_tangent_angles(x_array, z_upper_array, z_lower_array, index):
         """
         為非對稱幾何計算上下的切線角度
@@ -307,9 +253,31 @@ class CSTDerivatives:
             'bottom': float   # 下側角度（從z_lower斜率）
         }
         """
+        n = len(x_array)
+
+        # 使用有限差分計算斜率
+        if index == 0:
+            # 前向差分
+            dz_upper_dx = (z_upper_array[1] - z_upper_array[0]) / (x_array[1] - x_array[0])
+            dz_lower_dx = (z_lower_array[1] - z_lower_array[0]) / (x_array[1] - x_array[0])
+        elif index == n - 1:
+            # 後向差分
+            dz_upper_dx = (z_upper_array[index] - z_upper_array[index-1]) / (x_array[index] - x_array[index-1])
+            dz_lower_dx = (z_lower_array[index] - z_lower_array[index-1]) / (x_array[index] - x_array[index-1])
+        else:
+            # 中心差分（更準確）
+            dz_upper_dx = (z_upper_array[index+1] - z_upper_array[index-1]) / (x_array[index+1] - x_array[index-1])
+            dz_lower_dx = (z_lower_array[index+1] - z_lower_array[index-1]) / (x_array[index+1] - x_array[index-1])
+
+        # 轉換為角度
+        angle_top = math.degrees(math.atan(dz_upper_dx))
+        # ⚠️ 關鍵：Bottom需要反號！
+        # VSP的角度定義：上下應該朝同方向以保持平滑
+        angle_bottom = -math.degrees(math.atan(dz_lower_dx))
+
         return {
-            'top': CSTDerivatives.curve_tangent_angle(x_array, z_upper_array, index),
-            'bottom': CSTDerivatives.curve_tangent_angle(x_array, z_lower_array, index, flip_sign=True),
+            'top': angle_top,
+            'bottom': angle_bottom
         }
 
 

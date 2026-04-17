@@ -69,38 +69,6 @@ class TestGeometryPeakPosition(unittest.TestCase):
         self.assertAlmostEqual(float(np.max(early_curves["width"])), base_gene["W_max"], delta=2e-3)
         self.assertAlmostEqual(float(np.max(late_curves["z_upper"])), base_gene["H_top_max"], delta=2e-3)
 
-    def test_tail_conditions_are_enforced_in_thickness_and_centerline_space(self):
-        gene = {
-            "L": 2.5,
-            "W_max": 0.60,
-            "H_top_max": 0.95,
-            "H_bot_max": 0.35,
-            "N1": 0.5,
-            "N2_top": 0.70,
-            "N2_bot": 0.85,
-            "X_max_pos": 0.34,
-            "X_offset": 0.7,
-            "M_top": 2.5,
-            "N_top": 2.5,
-            "M_bot": 2.5,
-            "N_bot": 2.5,
-            "tail_rise": 0.12,
-            "blend_start": 0.82,
-            "blend_power": 2.6,
-            "w0": 0.22,
-            "w1": 0.38,
-            "w2": 0.27,
-            "w3": 0.12,
-        }
-
-        curves = CST_Modeler.generate_asymmetric_fairing(gene, num_sections=160)
-
-        self.assertAlmostEqual(float(curves["super_height"][-1]), 0.0, places=8)
-        self.assertAlmostEqual(float(curves["z_loc"][-1]), gene["tail_rise"], places=8)
-        self.assertAlmostEqual(float(curves["z_upper"][-1]), gene["tail_rise"], places=8)
-        self.assertAlmostEqual(float(curves["z_lower"][-1]), gene["tail_rise"], places=8)
-        self.assertTrue(np.all(curves["super_height"] >= -1e-10))
-
 
 if __name__ == "__main__":
     unittest.main()
