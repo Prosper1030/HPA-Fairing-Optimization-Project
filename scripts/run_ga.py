@@ -198,6 +198,8 @@ def prepare_ga_su2_shortlist(pm, *, top_n: int, flow_conditions: dict, output_di
         "output_dir": str(shortlist_dir),
         "manifest_json": manifest["ManifestFiles"]["json"],
         "manifest_markdown": manifest["ManifestFiles"]["markdown"],
+        "shortlist_report_json": manifest["ShortlistReportFiles"]["json"],
+        "shortlist_report_markdown": manifest["ShortlistReportFiles"]["markdown"],
         "run_script": manifest["RunScript"],
     }
 

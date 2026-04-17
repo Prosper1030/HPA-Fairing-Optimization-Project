@@ -238,6 +238,33 @@ def _build_case_readme(case_name: str, case_entry: dict, su2_settings: dict) -> 
         f"- LaminarFraction: {case_entry['LaminarFraction']:.3f}",
         f"- ReynoldsNumber(L): {case_entry['ReynoldsNumber']:.6e}",
         "",
+    ]
+
+    if case_entry.get("ProxyScore") is not None:
+        lines.extend(
+            [
+                "## Selection Context",
+                "",
+                f"- ProxyScore: {case_entry['ProxyScore']:.4f}",
+                f"- SourceGeneration: {case_entry.get('SourceGeneration', 'n/a')}",
+                f"- SourceIndividual: {case_entry.get('SourceIndividual', 'n/a')}",
+                "",
+            ]
+        )
+
+    if case_entry.get("Recommendations"):
+        lines.extend(
+            [
+                "## Proxy Recommendations",
+                "",
+            ]
+        )
+        for recommendation in case_entry["Recommendations"]:
+            lines.append(f"- {recommendation}")
+        lines.append("")
+
+    lines.extend(
+        [
         "## Next Steps",
         "",
         "1. 以這個 case 的外形重建或匯出最終 mesh，存成 `fairing_mesh.su2`。",
@@ -250,7 +277,8 @@ def _build_case_readme(case_name: str, case_entry: dict, su2_settings: dict) -> 
         f"- Configuration syntax: {SU2_DOC_LINKS['configuration']}",
         f"- Incompressible setup: {SU2_DOC_LINKS['physical_definition']}",
         f"- Example incompressible tutorial: {SU2_DOC_LINKS['incompressible_tutorial']}",
-    ]
+        ]
+    )
     return "\n".join(lines) + "\n"
 
 
@@ -275,6 +303,7 @@ def _build_manifest_markdown(manifest: dict) -> str:
                 f"- CaseDir: {entry['CaseDir']}",
                 f"- Drag: {entry['Drag']:.4f} N",
                 f"- Cd: {entry['Cd']:.6f}",
+                f"- ProxyScore: {entry['ProxyScore']:.4f}" if entry.get("ProxyScore") is not None else "- ProxyScore: n/a",
                 f"- ReynoldsNumber(L): {entry['ReynoldsNumber']:.6e}",
                 f"- FilledFields: {', '.join(entry['FilledFields']) if entry['FilledFields'] else 'none'}",
                 "",
@@ -297,6 +326,86 @@ def _build_manifest_markdown(manifest: dict) -> str:
             f"- Incompressible example tutorial: {SU2_DOC_LINKS['incompressible_tutorial']}",
         ]
     )
+    return "\n".join(lines) + "\n"
+
+
+def _build_shortlist_report(case_entries: list[dict], report_files: dict) -> dict:
+    summary_cases = []
+    for entry in case_entries:
+        summary_cases.append(
+            {
+                "Rank": entry["Rank"],
+                "CaseName": entry["CaseName"],
+                "ProxyScore": entry.get("ProxyScore"),
+                "Drag": entry["Drag"],
+                "Cd": entry["Cd"],
+                "Swet": entry["Swet"],
+                "LaminarFraction": entry["LaminarFraction"],
+                "SourceGeneration": entry.get("SourceGeneration"),
+                "SourceIndividual": entry.get("SourceIndividual"),
+                "FilledFields": entry["FilledFields"],
+                "TopRecommendations": entry.get("Recommendations", [])[:2],
+                "CaseDir": entry["CaseDir"],
+                "SU2Config": entry["PreparedFiles"]["su2_config"],
+            }
+        )
+
+    return {
+        "GeneratedAt": datetime.now().isoformat(),
+        "CaseCount": len(summary_cases),
+        "Cases": summary_cases,
+        "ReportFiles": report_files,
+    }
+
+
+def _build_shortlist_report_markdown(summary: dict) -> str:
+    lines = [
+        "# SU2 Shortlist Comparison Report",
+        "",
+        f"- GeneratedAt: {summary['GeneratedAt']}",
+        f"- CaseCount: {summary['CaseCount']}",
+        "",
+        "| Rank | Case | ProxyScore | Drag (N) | Cd | Source |",
+        "| --- | --- | ---: | ---: | ---: | --- |",
+    ]
+
+    for entry in summary["Cases"]:
+        source_generation = entry.get("SourceGeneration")
+        source_individual = entry.get("SourceIndividual")
+        if source_generation is None or source_individual is None:
+            source = "n/a"
+        else:
+            source = f"gen {source_generation} / ind {source_individual}"
+        proxy_score = "n/a" if entry.get("ProxyScore") is None else f"{entry['ProxyScore']:.4f}"
+        lines.append(
+            f"| {entry['Rank']} | {entry['CaseName']} | {proxy_score} | {entry['Drag']:.4f} | {entry['Cd']:.6f} | {source} |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Case Notes",
+            "",
+        ]
+    )
+
+    for entry in summary["Cases"]:
+        lines.extend(
+            [
+                f"### {entry['Rank']}. {entry['CaseName']}",
+                "",
+                f"- CaseDir: {entry['CaseDir']}",
+                f"- SU2Config: {entry['SU2Config']}",
+                f"- FilledFields: {', '.join(entry['FilledFields']) if entry['FilledFields'] else 'none'}",
+            ]
+        )
+        recommendations = entry.get("TopRecommendations", [])
+        if recommendations:
+            lines.append("- TopRecommendations:")
+            for recommendation in recommendations:
+                lines.append(f"  - {recommendation}")
+        lines.append("")
+
     return "\n".join(lines) + "\n"
 
 
@@ -425,6 +534,7 @@ def prepare_shortlist_validation_package(
             "ReynoldsNumber": float(_compute_reynolds_number(gene, normalized_flow)),
             "ReferenceLength": float(gene["L"]),
             "FilledFields": gene_metadata.get("filled_fields", []),
+            "Recommendations": list(analysis.get("Recommendations", [])),
             "PreparedFiles": {
                 "gene_json": str(case_dir / "gene.json"),
                 "summary_json": report_files["summary_json"],
@@ -437,6 +547,15 @@ def prepare_shortlist_validation_package(
         if "GeneFile" in candidate:
             case_entry["GeneFile"] = str(candidate["GeneFile"])
         case_entry["Notes"] = dict(candidate.get("Notes", {})) if isinstance(candidate.get("Notes"), Mapping) else candidate.get("Notes")
+        if isinstance(case_entry["Notes"], Mapping):
+            score = case_entry["Notes"].get("score")
+            case_entry["ProxyScore"] = float(score) if isinstance(score, (int, float)) else None
+            case_entry["SourceGeneration"] = case_entry["Notes"].get("generation")
+            case_entry["SourceIndividual"] = case_entry["Notes"].get("individual")
+        else:
+            case_entry["ProxyScore"] = None
+            case_entry["SourceGeneration"] = None
+            case_entry["SourceIndividual"] = None
         (case_dir / "README.md").write_text(
             _build_case_readme(case_name, case_entry, resolved_settings),
             encoding="utf-8",
@@ -448,6 +567,18 @@ def prepare_shortlist_validation_package(
         entry["Rank"] = rank
 
     run_script = _write_root_run_script(root, case_entries)
+    shortlist_report_json = root / "shortlist_report.json"
+    shortlist_report_md = root / "shortlist_report.md"
+    shortlist_report_files = {
+        "json": str(shortlist_report_json),
+        "markdown": str(shortlist_report_md),
+    }
+    shortlist_report = _build_shortlist_report(case_entries, shortlist_report_files)
+    shortlist_report_json.write_text(
+        json.dumps(shortlist_report, indent=2, ensure_ascii=False, default=_json_default) + "\n",
+        encoding="utf-8",
+    )
+    shortlist_report_md.write_text(_build_shortlist_report_markdown(shortlist_report), encoding="utf-8")
     manifest = {
         "GeneratedAt": datetime.now().isoformat(),
         "Backend": backend,
@@ -463,6 +594,7 @@ def prepare_shortlist_validation_package(
             "json": str(root / "validation_manifest.json"),
             "markdown": str(root / "validation_manifest.md"),
         },
+        "ShortlistReportFiles": shortlist_report_files,
     }
 
     manifest_json = root / "validation_manifest.json"

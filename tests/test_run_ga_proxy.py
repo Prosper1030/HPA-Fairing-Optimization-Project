@@ -94,6 +94,7 @@ class TestRunGaProxy(unittest.TestCase):
             self.assertTrue(shortlist["prepared"])
             self.assertEqual(shortlist["top_n_requested"], 2)
             self.assertTrue(os.path.exists(shortlist["manifest_json"]))
+            self.assertTrue(os.path.exists(shortlist["shortlist_report_json"]))
             self.assertTrue(os.path.exists(shortlist["run_script"]))
 
             with open(shortlist["manifest_json"], "r", encoding="utf-8") as handle:

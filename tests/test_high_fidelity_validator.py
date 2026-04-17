@@ -40,12 +40,15 @@ class TestHighFidelityValidator(unittest.TestCase):
             self.assertEqual(manifest["CaseCount"], 2)
             self.assertTrue(os.path.exists(manifest["ManifestFiles"]["json"]))
             self.assertTrue(os.path.exists(manifest["ManifestFiles"]["markdown"]))
+            self.assertTrue(os.path.exists(manifest["ShortlistReportFiles"]["json"]))
+            self.assertTrue(os.path.exists(manifest["ShortlistReportFiles"]["markdown"]))
             self.assertTrue(os.path.exists(manifest["RunScript"]))
 
             with open(manifest["ManifestFiles"]["json"], "r", encoding="utf-8") as handle:
                 saved_manifest = json.load(handle)
 
             self.assertIn("ManifestFiles", saved_manifest)
+            self.assertIn("ShortlistReportFiles", saved_manifest)
             self.assertEqual(saved_manifest["CaseCount"], 2)
 
             case_entry = saved_manifest["Cases"][0]
@@ -65,6 +68,7 @@ class TestHighFidelityValidator(unittest.TestCase):
 
             beta_entry = next(entry for entry in saved_manifest["Cases"] if entry["CaseName"] == "beta")
             self.assertIn("H_top_max", beta_entry["FilledFields"])
+            self.assertTrue(beta_entry["Recommendations"])
 
     def test_cli_can_prepare_shortlist_from_batch_summary(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -113,6 +117,7 @@ class TestHighFidelityValidator(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, msg=proc.stderr)
             self.assertIn("SU2 shortlist 工作包準備完成", proc.stdout)
             self.assertTrue(os.path.exists(os.path.join(output_dir, "validation_manifest.json")))
+            self.assertTrue(os.path.exists(os.path.join(output_dir, "shortlist_report.json")))
             self.assertTrue(os.path.exists(os.path.join(output_dir, "run_all_su2_cases.sh")))
 
             with open(os.path.join(output_dir, "validation_manifest.json"), "r", encoding="utf-8") as handle:
