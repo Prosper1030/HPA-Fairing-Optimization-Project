@@ -52,6 +52,31 @@ class TestDragProxyMetrics(unittest.TestCase):
         self.assertLess(aft_peak["LaminarFraction"], baseline["LaminarFraction"])
         self.assertGreater(aft_peak["Cd_pressure"], baseline["Cd_pressure"])
         self.assertGreater(aft_peak["Cd"], baseline["Cd"])
+        self.assertGreater(aft_peak["Quality"]["pressure_risk"], baseline["Quality"]["pressure_risk"])
+
+    def test_proxy_flags_high_pressure_risk_for_steep_tail_case(self):
+        proxy = FairingDragProxy()
+        steep_tail_gene = {
+            **self.base_gene,
+            "L": 2.463576995012689,
+            "W_max": 0.5401448192294462,
+            "H_top_max": 0.9688933779766921,
+            "H_bot_max": 0.4969736180688764,
+            "X_max_pos": 0.4750946075323426,
+            "tail_rise": 0.15199121805064983,
+            "M_top": 3.9805360794379796,
+            "N_top": 2.633820962361373,
+            "M_bot": 3.6288991654137503,
+            "N_bot": 2.9131356487487867,
+        }
+
+        result = proxy.evaluate_curves(
+            CST_Modeler.generate_asymmetric_fairing(steep_tail_gene, num_sections=160)
+        )
+
+        self.assertEqual(result["Model"], "fast_drag_proxy_v2")
+        self.assertGreater(result["Cd_pressure"], 0.08)
+        self.assertGreater(result["Quality"]["pressure_risk"], 0.65)
 
     def test_evaluate_gene_proxy_details_are_self_consistent(self):
         result = evaluate_gene(

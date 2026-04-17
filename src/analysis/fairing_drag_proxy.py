@@ -273,8 +273,13 @@ class FairingDragProxy:
             + 0.14 * monotonic_quality
             + 0.10 * curvature_quality
         )
-        laminar_fraction = 0.08 + 0.40 * quality_score
-        return float(np.clip(laminar_fraction, 0.10, 0.55))
+        separation_guard = np.exp(
+            -((max(0.0, metrics.top_tail_angle_deg - 32.0) / 10.0) ** 2)
+            -((max(0.0, metrics.bottom_tail_angle_deg - 22.0) / 8.0) ** 2)
+            -((max(0.0, metrics.side_tail_angle_deg - 14.0) / 5.0) ** 2)
+        )
+        laminar_fraction = (0.08 + 0.40 * quality_score) * (0.82 + 0.18 * separation_guard)
+        return float(np.clip(laminar_fraction, 0.08, 0.55))
 
     def estimate_skin_friction_cf(self, metrics: ProxyMetrics, laminar_fraction: float) -> float:
         re_total = metrics.reynolds_number
@@ -295,23 +300,37 @@ class FairingDragProxy:
         fr = max(metrics.fineness_ratio, 1.0)
         return float(1.0 + 1.5 / (fr ** 1.5) + 7.0 / (fr ** 3.0))
 
-    def estimate_pressure_cd(self, metrics: ProxyMetrics) -> float:
+    def estimate_pressure_cd(self, metrics: ProxyMetrics, laminar_fraction: float) -> tuple[float, float]:
         top_excess = max(0.0, metrics.top_tail_angle_deg - 18.0)
         bottom_excess = max(0.0, metrics.bottom_tail_angle_deg - 14.0)
         side_excess = max(0.0, metrics.side_tail_angle_deg - 13.0)
         curvature_excess = max(0.0, metrics.recovery_curvature - 4.0)
-        peak_shift = max(0.0, metrics.x_peak_area_frac - 0.48) + max(0.0, 0.20 - metrics.x_peak_area_frac)
+        peak_shift = max(0.0, metrics.x_peak_area_frac - 0.45) + max(0.0, 0.22 - metrics.x_peak_area_frac)
+        low_fineness = max(0.0, 3.2 - metrics.fineness_ratio)
+        low_laminar = max(0.0, 0.38 - laminar_fraction)
 
         base_penalty = (
-            6.0e-6 * (top_excess ** 2)
-            + 1.0e-5 * (bottom_excess ** 2)
-            + 7.0e-6 * (side_excess ** 2)
-            + 0.004 * metrics.area_non_monotonicity
-            + 2.5e-6 * (curvature_excess ** 2)
-            + 0.006 * (peak_shift ** 2)
+            1.5e-4 * (top_excess ** 2)
+            + 2.5e-4 * (bottom_excess ** 2)
+            + 8.0e-5 * (side_excess ** 2)
+            + 0.008 * metrics.area_non_monotonicity
+            + 1.5e-5 * (curvature_excess ** 2)
+            + 0.012 * (peak_shift ** 2)
+            + 0.010 * (low_fineness ** 2)
+            + 0.020 * (low_laminar ** 2)
         )
 
-        return float(base_penalty * (metrics.max_area / max(self.s_ref, 1e-9)))
+        pressure_cd = float(base_penalty * (metrics.max_area / max(self.s_ref, 1e-9)))
+        pressure_risk = _clip01(
+            0.015 * top_excess
+            + 0.022 * bottom_excess
+            + 0.010 * side_excess
+            + 0.20 * low_fineness
+            + 0.55 * low_laminar
+            + 1.50 * metrics.area_non_monotonicity
+            + 0.10 * peak_shift
+        )
+        return pressure_cd, float(pressure_risk)
 
     def evaluate_curves(self, curves: dict) -> dict:
         metrics = self.extract_metrics(curves)
@@ -319,7 +338,7 @@ class FairingDragProxy:
         cf_mix = self.estimate_skin_friction_cf(metrics, laminar_fraction)
         form_factor = self.estimate_form_factor(metrics)
         cd_viscous = metrics.swet * cf_mix * form_factor / self.s_ref
-        cd_pressure = self.estimate_pressure_cd(metrics)
+        cd_pressure, pressure_risk = self.estimate_pressure_cd(metrics, laminar_fraction)
         cd_total = cd_viscous + cd_pressure
         drag_force = self.q * cd_total * self.s_ref
 
@@ -342,6 +361,7 @@ class FairingDragProxy:
             "Quality": {
                 "area_monotonicity": float(1.0 - _clip01(metrics.area_non_monotonicity)),
                 "recovery_curvature": float(metrics.recovery_curvature),
+                "pressure_risk": float(pressure_risk),
             },
-            "Model": "fast_drag_proxy_v1",
+            "Model": "fast_drag_proxy_v2",
         }

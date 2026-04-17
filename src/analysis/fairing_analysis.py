@@ -248,6 +248,9 @@ def generate_recommendations(result: dict) -> list[str]:
     if float(quality["area_monotonicity"]) < 0.98:
         recommendations.append("尾段截面回收有非單調跡象，建議檢查尾部混合區參數，避免局部再膨脹。")
 
+    if float(quality.get("pressure_risk", 0.0)) > 0.65:
+        recommendations.append("目前尾段分離風險偏高，若要拿去做高保真驗證，建議先把上/下尾角再放緩。")
+
     if not recommendations:
         recommendations.append("目前沒有明顯拖累特徵，可先微調最大截面位置與尾段平滑度做小幅優化。")
 
@@ -431,6 +434,7 @@ def _build_summary_markdown(summary: dict) -> str:
             f"- Swet: {analysis['Swet']:.3f} m^2",
             f"- LaminarFraction: {analysis['LaminarFraction']:.3f}",
             f"- XPeakAreaFrac: {analysis['XPeakAreaFrac']:.3f}",
+            f"- PressureRisk: {analysis['Quality'].get('pressure_risk', 0.0):.3f}",
             "",
             "## Tail Angles",
             "",
