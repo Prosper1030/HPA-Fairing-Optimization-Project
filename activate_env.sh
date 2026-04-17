@@ -129,6 +129,21 @@ _hpa_discover_openvsp_python_root() {
     return 1
 }
 
+_hpa_discover_local_su2_bin() {
+    su2_root="$PROJECT_ROOT/tools/su2"
+    [ -d "$su2_root" ] || return 1
+
+    for candidate in "$su2_root"/*/bin; do
+        [ -d "$candidate" ] || continue
+        if [ -x "$candidate/SU2_CFD" ]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 _hpa_python_has_module() {
     module_name="$1"
 
@@ -218,6 +233,14 @@ else
         _hpa_append_path_var PATH "$(dirname "$(dirname "$OPENVSP_ROOT")")/MacOS"
         _hpa_note "Detected OpenVSP Python API under: $OPENVSP_ROOT"
     fi
+fi
+
+LOCAL_SU2_BIN=$(_hpa_discover_local_su2_bin 2>/dev/null || true)
+if [ -n "$LOCAL_SU2_BIN" ]; then
+    _hpa_append_path_var PATH "$LOCAL_SU2_BIN"
+    _hpa_append_path_var PYTHONPATH "$LOCAL_SU2_BIN"
+    export SU2_RUN="$LOCAL_SU2_BIN"
+    _hpa_note "Detected local SU2 tools under: $LOCAL_SU2_BIN"
 fi
 
 if python - <<'PY' >/dev/null 2>&1
