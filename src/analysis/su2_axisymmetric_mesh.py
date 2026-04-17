@@ -26,11 +26,19 @@ MARKER_NAMES = {
 
 DEFAULT_AXISYMMETRIC_MESH_OPTIONS = {
     "upstream_factor": 0.75,
-    "downstream_factor": 2.0,
-    "radial_factor": 4.0,
-    "min_farfield_radius_factor": 1.5,
-    "target_triangles": 2800,
-    "quality_min_angle_deg": 28.0,
+    "downstream_factor": 3.0,
+    "radial_factor": 5.0,
+    "min_farfield_radius_factor": 1.8,
+    "target_triangles": 5200,
+    "quality_min_angle_deg": 30.0,
+    "body_station_count": 120,
+    "near_body_layers": 3,
+    "near_body_first_spacing_factor": 0.012,
+    "near_body_growth": 1.9,
+    "wake_length_factor": 1.6,
+    "wake_radius_factor": 1.4,
+    "wake_streamwise_points": 18,
+    "wake_radial_points": 7,
 }
 
 
@@ -78,9 +86,37 @@ def _dedupe_profile_points(points: list[tuple[float, float]]) -> list[tuple[floa
     return deduped
 
 
+def _resample_profile_points(
+    x_coords: np.ndarray,
+    radius: np.ndarray,
+    station_count: int,
+) -> list[tuple[float, float]]:
+    target_count = max(int(station_count), len(x_coords))
+    x_resampled = np.linspace(float(x_coords[0]), float(x_coords[-1]), target_count)
+    radius_resampled = np.interp(x_resampled, x_coords, radius)
+    if len(radius_resampled) >= 1:
+        radius_resampled[0] = 0.0
+        radius_resampled[-1] = 0.0
+    return _dedupe_profile_points(
+        [(float(x_value), float(r_value)) for x_value, r_value in zip(x_resampled, radius_resampled)]
+    )
+
+
+def _dedupe_seed_points(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    deduped: list[tuple[float, float]] = []
+    seen: set[tuple[int, int]] = set()
+    for x_value, r_value in points:
+        key = (round(float(x_value), 9), round(float(r_value), 9))
+        if key in seen:
+            continue
+        deduped.append((float(x_value), float(r_value)))
+        seen.add(key)
+    return deduped
+
+
 def _polygon_definition(curves: dict, options: dict) -> dict:
     x, radius = build_area_equivalent_radius_profile(curves)
-    body_points = _dedupe_profile_points([(float(xi), float(ri)) for xi, ri in zip(x, radius)])
+    body_points = _resample_profile_points(x, radius, int(options["body_station_count"]))
     if len(body_points) < 3:
         raise AxisymmetricMeshError("外形截面點數不足，無法建立 axisymmetric mesh")
 
@@ -144,6 +180,51 @@ def _polygon_definition(curves: dict, options: dict) -> dict:
     }
 
 
+def _build_body_refinement_seed_points(polygon: dict, options: dict) -> list[tuple[float, float]]:
+    body_points = polygon["body_points"]
+    first_spacing = max(
+        float(options["near_body_first_spacing_factor"]) * float(polygon["length"]),
+        1e-4,
+    )
+    growth = max(float(options["near_body_growth"]), 1.1)
+    near_body_layers = max(int(options["near_body_layers"]), 1)
+    radial_cap = float(polygon["farfield_radius"]) * 0.92
+
+    seed_points: list[tuple[float, float]] = []
+    for layer_index in range(near_body_layers):
+        offset = first_spacing * (growth ** layer_index)
+        for x_value, radius_value in body_points[1:-1]:
+            candidate_r = float(radius_value) + offset
+            if 0.0 < candidate_r < radial_cap:
+                seed_points.append((float(x_value), candidate_r))
+    return seed_points
+
+
+def _build_wake_refinement_seed_points(polygon: dict, options: dict) -> list[tuple[float, float]]:
+    wake_length = max(float(options["wake_length_factor"]) * float(polygon["length"]), 0.25 * float(polygon["length"]))
+    wake_radius = min(
+        max(float(options["wake_radius_factor"]) * float(polygon["max_radius"]), 0.06 * float(polygon["length"])),
+        0.60 * float(polygon["farfield_radius"]),
+    )
+    start_x = float(polygon["length"]) + 0.04 * float(polygon["length"])
+    end_x = min(start_x + wake_length, float(polygon["bounds"]["x_max"]) - 0.06 * float(polygon["length"]))
+    if end_x <= start_x or wake_radius <= 0.0:
+        return []
+
+    x_coords = np.linspace(start_x, end_x, max(int(options["wake_streamwise_points"]), 3))
+    r_min = max(0.01 * float(polygon["length"]), 1e-4)
+    r_coords = np.linspace(r_min, wake_radius, max(int(options["wake_radial_points"]), 2))
+    return [(float(x_value), float(r_value)) for x_value in x_coords for r_value in r_coords]
+
+
+def _build_interior_seed_points(polygon: dict, options: dict) -> list[tuple[float, float]]:
+    seed_points = [
+        *_build_body_refinement_seed_points(polygon, options),
+        *_build_wake_refinement_seed_points(polygon, options),
+    ]
+    return _dedupe_seed_points(seed_points)
+
+
 def _triangulate_polygon(polygon: dict, options: dict) -> dict:
     triangle_module = _triangle()
     domain_area = (polygon["bounds"]["x_max"] - polygon["bounds"]["x_min"]) * polygon["bounds"]["r_max"]
@@ -152,9 +233,15 @@ def _triangulate_polygon(polygon: dict, options: dict) -> dict:
     min_angle = float(options["quality_min_angle_deg"])
     triangulation_flags = f"pq{min_angle:.0f}a{max_area:.8f}"
 
+    interior_seed_points = _build_interior_seed_points(polygon, options)
+    vertices = polygon["vertices"]
+    if interior_seed_points:
+        interior_array = np.asarray(interior_seed_points, dtype=float)
+        vertices = np.vstack([vertices, interior_array])
+
     result = triangle_module.triangulate(
         {
-            "vertices": polygon["vertices"],
+            "vertices": vertices,
             "segments": polygon["segments"],
             "segment_markers": polygon["segment_markers"],
         },
@@ -162,6 +249,7 @@ def _triangulate_polygon(polygon: dict, options: dict) -> dict:
     )
     if "triangles" not in result or len(result["triangles"]) == 0:
         raise AxisymmetricMeshError("triangle 沒有成功產生內部單元")
+    result["interior_seed_points"] = interior_seed_points
     return result
 
 
@@ -215,6 +303,7 @@ def generate_axisymmetric_mesh(
         "Elements": int(len(triangulation["triangles"])),
         "BoundaryElements": int(len(triangulation["segments"])),
         "BodyStations": int(len(polygon["body_points"])),
+        "InteriorSeedPoints": int(len(triangulation.get("interior_seed_points", []))),
         "MaxTriangleArea": float(
             (polygon["bounds"]["x_max"] - polygon["bounds"]["x_min"]) * polygon["bounds"]["r_max"]
             / float(resolved_options["target_triangles"])

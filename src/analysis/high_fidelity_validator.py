@@ -38,6 +38,9 @@ DEFAULT_SU2_SETTINGS = {
     "iterations": 1500,
     "inner_iterations": 50,
     "cfl": 10.0,
+    "conv_startiter": 20,
+    "conv_cauchy_elems": 25,
+    "conv_cauchy_eps": 1e-6,
     "conv_num_method_flow": "FDS",
     "marker_wall": "fairing",
     "marker_far": "farfield",
@@ -50,8 +53,17 @@ DEFAULT_SU2_SETTINGS = {
 DEFAULT_SU2_RUNTIME_SETTINGS = {
     "conv_filename": "history",
     "tabular_format": "CSV",
-    "screen_output": "(INNER_ITER, RMS_RES, AERO_COEFF)",
-    "history_output": "(ITER, RMS_RES, AERO_COEFF)",
+    "screen_output": "(INNER_ITER, RMS_RES, CAUCHY, AERO_COEFF)",
+    "history_output": "(ITER, RMS_RES, CAUCHY, AERO_COEFF)",
+}
+
+AXISYMMETRIC_BENCHMARK_SU2_SETTINGS = {
+    "iterations": 400,
+    "inner_iterations": 400,
+    "cfl": 5.0,
+    "conv_startiter": 30,
+    "conv_cauchy_elems": 25,
+    "conv_cauchy_eps": 5e-6,
 }
 
 SU2_DOC_LINKS = {
@@ -209,6 +221,16 @@ def _write_runtime_config(config_path: Path) -> Path:
     runtime_config_path = config_path.with_name("su2_runtime.cfg")
     runtime_config_path.write_text("\n".join(output_lines) + "\n", encoding="utf-8")
     return runtime_config_path
+
+
+def _resolve_su2_settings(mesh_mode: str, su2_settings: Mapping | None = None) -> dict:
+    resolved_settings = dict(DEFAULT_SU2_SETTINGS)
+    if mesh_mode == "axisymmetric_2d":
+        resolved_settings.update(AXISYMMETRIC_BENCHMARK_SU2_SETTINGS)
+    if su2_settings:
+        resolved_settings.update(dict(su2_settings))
+    resolved_settings["mesh_mode"] = mesh_mode
+    return resolved_settings
 
 
 def _history_candidates(case_dir: Path) -> list[Path]:
@@ -393,6 +415,9 @@ def _build_su2_config(case_name: str, gene: dict, flow_conditions: dict, su2_set
         f"INNER_ITER= {int(su2_settings['inner_iterations'])}\n"
         "CONV_FIELD= DRAG\n"
         "CONV_RESIDUAL_MINVAL= -10\n"
+        f"CONV_STARTITER= {int(su2_settings['conv_startiter'])}\n"
+        f"CONV_CAUCHY_ELEMS= {int(su2_settings['conv_cauchy_elems'])}\n"
+        f"CONV_CAUCHY_EPS= {float(su2_settings['conv_cauchy_eps']):.1e}\n"
         f"CONV_NUM_METHOD_FLOW= {su2_settings['conv_num_method_flow']}\n"
         f"CFL_NUMBER= {float(su2_settings['cfl']):.2f}\n"
         "CFL_ADAPT= NO\n"
@@ -973,10 +998,7 @@ def prepare_shortlist_validation_package(
         raise AnalysisInputError("shortlist 不可為空")
 
     normalized_flow = load_flow_conditions(flow_conditions)
-    resolved_settings = dict(DEFAULT_SU2_SETTINGS)
-    if su2_settings:
-        resolved_settings.update(dict(su2_settings))
-    resolved_settings["mesh_mode"] = mesh_mode
+    resolved_settings = _resolve_su2_settings(mesh_mode, su2_settings)
 
     root = Path(output_dir)
     root.mkdir(parents=True, exist_ok=True)

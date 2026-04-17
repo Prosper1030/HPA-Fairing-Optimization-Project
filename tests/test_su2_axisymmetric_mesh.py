@@ -53,12 +53,16 @@ class TestSU2AxisymmetricMesh(unittest.TestCase):
                 cfg_text = handle.read()
             self.assertIn("AXISYMMETRIC= YES", cfg_text)
             self.assertIn("MARKER_SYM= ( axis )", cfg_text)
+            self.assertIn("INNER_ITER= 400", cfg_text)
+            self.assertIn("CONV_CAUCHY_ELEMS= 25", cfg_text)
 
             with open(metadata_path, "r", encoding="utf-8") as handle:
                 metadata = json.load(handle)
             self.assertEqual(metadata["MeshMode"], "axisymmetric_2d")
             self.assertGreater(metadata["Nodes"], 0)
             self.assertGreater(metadata["Elements"], 0)
+            self.assertGreater(metadata["InteriorSeedPoints"], 0)
+            self.assertGreaterEqual(metadata["BodyStations"], 120)
 
     def test_prepare_shortlist_cli_supports_axisymmetric_mesh_mode(self):
         with tempfile.TemporaryDirectory() as temp_dir:
