@@ -691,12 +691,17 @@ def _write_root_run_script(output_dir: Path, case_entries: list[dict]) -> Path:
 
 
 def _resolve_solver_command(solver_command: str) -> list[str]:
+    direct_path = Path(solver_command).expanduser()
+    if direct_path.exists():
+        return [str(direct_path.resolve())]
+
     command = shlex.split(solver_command)
     if not command:
         raise SU2ExecutionError("solver_command 不可為空")
 
     executable = command[0]
     if Path(executable).exists():
+        command[0] = str(Path(executable).resolve())
         return command
     resolved = shutil.which(executable)
     if resolved is None:
@@ -706,6 +711,10 @@ def _resolve_solver_command(solver_command: str) -> list[str]:
 
 
 def _preview_solver_command(solver_command: str) -> list[str]:
+    direct_path = Path(solver_command).expanduser()
+    if direct_path.exists():
+        return [str(direct_path.resolve())]
+
     command = shlex.split(solver_command)
     if not command:
         raise SU2ExecutionError("solver_command 不可為空")

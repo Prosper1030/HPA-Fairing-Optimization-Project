@@ -162,6 +162,33 @@ class TestHighFidelityValidator(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(case_dir, "su2_result.json")))
             self.assertTrue(os.path.exists(os.path.join(case_dir, "su2_result.md")))
 
+    def test_run_prepared_su2_case_accepts_solver_path_with_spaces(self):
+        with tempfile.TemporaryDirectory(prefix="su2 solver test ") as temp_dir:
+            manifest = prepare_shortlist_validation_package(
+                [{"name": "alpha", "gene": self.example_gene}],
+                output_dir=temp_dir,
+            )
+            case_dir = manifest["Cases"][0]["CaseDir"]
+            mesh_path = os.path.join(case_dir, "fairing_mesh.su2")
+            with open(mesh_path, "w", encoding="utf-8") as handle:
+                handle.write("NDIME= 3\nNELEM= 0\nNPOIN= 0\nNMARK= 0\n")
+
+            solver_path = os.path.join(temp_dir, "fake solver.sh")
+            with open(solver_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "#!/bin/sh\n"
+                    "cat > history.csv <<'EOF'\n"
+                    "\"ITER\",\"DRAG\"\n"
+                    "1,0.030000\n"
+                    "EOF\n"
+                )
+            os.chmod(solver_path, 0o755)
+
+            result = run_prepared_su2_case(case_dir, solver_command=solver_path)
+
+            self.assertEqual(result["Status"], "completed")
+            self.assertTrue(result["SolverCommand"].endswith("fake solver.sh su2_runtime.cfg"))
+
     def test_run_prepared_su2_case_dry_run_does_not_require_installed_solver(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             manifest = prepare_shortlist_validation_package(
