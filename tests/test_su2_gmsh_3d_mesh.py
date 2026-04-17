@@ -71,6 +71,35 @@ class TestSU2Gmsh3DMesh(unittest.TestCase):
             self.assertGreater(metadata["FairingSurfaceCount"], 0)
             self.assertGreater(metadata["FarfieldSurfaceCount"], 0)
 
+    def test_prepare_shortlist_can_generate_boundary_layer_mesh(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest = prepare_shortlist_validation_package(
+                [{"name": "gmsh_bl_case", "gene": self.example_gene}],
+                output_dir=temp_dir,
+                mesh_mode="gmsh_3d",
+                mesh_options={
+                    "section_points": 12,
+                    "body_section_count": 10,
+                    "near_body_size_factor": 0.055,
+                    "farfield_size_factor": 0.26,
+                    "wake_size_factor": 0.085,
+                    "surface_mesh_size_factor": 0.024,
+                    "use_boundary_layer_extrusion": True,
+                    "boundary_layer_num_layers": 4,
+                    "boundary_layer_total_thickness_factor": 0.008,
+                },
+            )
+
+            case_dir = manifest["Cases"][0]["CaseDir"]
+            metadata_path = os.path.join(case_dir, "mesh_metadata.json")
+            with open(metadata_path, "r", encoding="utf-8") as handle:
+                metadata = json.load(handle)
+
+            self.assertTrue(metadata["BoundaryLayerInfo"]["Enabled"])
+            self.assertGreater(metadata["BoundaryLayerInfo"]["BoundaryLayerVolumeCount"], 0)
+            self.assertIn("13", metadata["VolumeElementTypeCounts"])
+            self.assertGreater(metadata["VolumeElementTypeCounts"]["13"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -37,6 +37,10 @@ DEFAULT_STUDY_PROFILES = {
             "farfield_size_factor": 0.25,
             "wake_size_factor": 0.082,
             "wake_half_width_factor": 0.65,
+            "surface_mesh_size_factor": 0.024,
+            "use_boundary_layer_extrusion": True,
+            "boundary_layer_num_layers": 5,
+            "boundary_layer_total_thickness_factor": 0.008,
         },
         "su2_settings": {
             "iterations": 500,
@@ -44,17 +48,24 @@ DEFAULT_STUDY_PROFILES = {
         },
     },
     "baseline": {
-        "mesh_options": {},
+        "mesh_options": {
+            "use_boundary_layer_extrusion": True,
+        },
         "su2_settings": {},
     },
     "fine": {
         "mesh_options": {
-            "section_points": 28,
-            "body_section_count": 24,
+            "section_points": 24,
+            "body_section_count": 22,
             "near_body_size_factor": 0.030,
             "farfield_size_factor": 0.18,
             "wake_size_factor": 0.052,
             "wake_half_width_factor": 0.85,
+            "surface_mesh_size_factor": 0.016,
+            "use_boundary_layer_extrusion": True,
+            "boundary_layer_num_layers": 7,
+            "boundary_layer_first_height_factor": 1.5e-4,
+            "boundary_layer_total_thickness_factor": 0.012,
         },
         "su2_settings": {
             "iterations": 750,
