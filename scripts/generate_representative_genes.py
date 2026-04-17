@@ -73,6 +73,7 @@ def main() -> int:
     args = parser.parse_args()
 
     defaults = load_analysis_config(os.path.join(project_root, "config", "analysis_config.json"))
+    proxy_model = defaults["proxy_model"]
     preset = args.preset or defaults["preset"]
     flow_path = args.flow or os.path.join(project_root, "config", "fluid_conditions.json")
     flow_conditions = load_flow_conditions(flow_path if os.path.exists(flow_path) else None)
@@ -101,6 +102,7 @@ def main() -> int:
             flow_conditions=flow_conditions,
             preset=preset,
             backend="fast_proxy",
+            proxy_model=proxy_model,
             include_geometry=True,
         )
         report_files = write_analysis_report_bundle(

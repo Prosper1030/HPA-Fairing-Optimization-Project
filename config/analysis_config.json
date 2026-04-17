@@ -1,5 +1,6 @@
 {
   "backend": "fast_proxy",
+  "proxy_model": "v6",
   "preset": "none",
   "report": {
     "output_root": "output/analysis",

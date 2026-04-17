@@ -56,12 +56,35 @@ class FairingDragProxy:
       retention and gentle Stratford-style pressure recovery
     """
 
-    def __init__(self, velocity=6.5, rho=1.225, mu=1.7894e-5, s_ref=1.0):
+    def __init__(
+        self,
+        velocity=6.5,
+        rho=1.225,
+        mu=1.7894e-5,
+        s_ref=1.0,
+        model_version: str = "v6",
+        turbulence_intensity: float | None = None,
+        roughness_height: float | None = None,
+        turbulence_intensity_ref: float = 0.005,
+        roughness_height_ref: float = 1e-5,
+    ):
         self.velocity = float(velocity)
         self.rho = float(rho)
         self.mu = float(mu)
         self.s_ref = float(s_ref)
         self.q = 0.5 * self.rho * (self.velocity ** 2)
+        normalized_version = str(model_version).strip().lower()
+        if normalized_version not in {"v5", "v6"}:
+            raise ValueError(f"Unsupported proxy model_version: {model_version}")
+        self.model_version = normalized_version
+        self.turbulence_intensity = (
+            None if turbulence_intensity is None else max(float(turbulence_intensity), 1e-6)
+        )
+        self.roughness_height = (
+            None if roughness_height is None else max(float(roughness_height), 1e-9)
+        )
+        self.turbulence_intensity_ref = max(float(turbulence_intensity_ref), 1e-6)
+        self.roughness_height_ref = max(float(roughness_height_ref), 1e-9)
 
     @staticmethod
     def _section_exponents(curves: dict) -> tuple[float, float, float, float]:
@@ -351,7 +374,13 @@ class FairingDragProxy:
     def _sigmoid(value: float) -> float:
         return float(1.0 / (1.0 + np.exp(-value)))
 
-    def estimate_laminar_fraction(self, metrics: ProxyMetrics) -> float:
+    @staticmethod
+    def _log_ratio(value: float | None, reference: float) -> float:
+        if value is None:
+            return 0.0
+        return float(np.log(max(value, 1e-12) / max(reference, 1e-12)))
+
+    def _estimate_transition_fraction_v5(self, metrics: ProxyMetrics) -> float:
         # Interpret "laminar fraction" as a transition-location surrogate:
         # the approximate fraction of body length that can remain laminar before
         # transition, driven mainly by forebody loading and smoothness rather
@@ -374,6 +403,36 @@ class FairingDragProxy:
         laminar_fraction = x_t_min + (x_t_max - x_t_min) * self._sigmoid(transition_argument)
         return float(np.clip(laminar_fraction, x_t_min, x_t_max))
 
+    def _estimate_transition_fraction_v6(self, metrics: ProxyMetrics) -> float:
+        x_t_min = 0.05
+        x_t_max = 0.70
+        x_peak_ref = 0.35
+        beta_0 = 1.40
+        beta_1 = 1.50
+        beta_2 = 0.55
+        beta_3 = 0.020
+        beta_4 = 0.18
+        beta_5 = 0.10
+
+        chi_ti = self._log_ratio(self.turbulence_intensity, self.turbulence_intensity_ref)
+        chi_k = self._log_ratio(self.roughness_height, self.roughness_height_ref)
+
+        transition_argument = (
+            beta_0
+            + beta_1 * (metrics.x_peak_area_frac - x_peak_ref)
+            - beta_2 * metrics.forebody_burden
+            - beta_3 * metrics.forebody_curvature
+            - beta_4 * chi_ti
+            - beta_5 * chi_k
+        )
+        transition_fraction = x_t_min + (x_t_max - x_t_min) * self._sigmoid(transition_argument)
+        return float(np.clip(transition_fraction, x_t_min, x_t_max))
+
+    def estimate_laminar_fraction(self, metrics: ProxyMetrics) -> float:
+        if self.model_version == "v5":
+            return self._estimate_transition_fraction_v5(metrics)
+        return self._estimate_transition_fraction_v6(metrics)
+
     def estimate_skin_friction_cf(self, metrics: ProxyMetrics, laminar_fraction: float) -> float:
         re_total = metrics.reynolds_number
         re_lam = max(re_total * laminar_fraction, 1.0)
@@ -393,7 +452,7 @@ class FairingDragProxy:
         fr = max(metrics.fineness_ratio, 1.0)
         return float(1.0 + 1.5 / (fr ** 1.5) + 7.0 / (fr ** 3.0))
 
-    def estimate_pressure_cd(self, metrics: ProxyMetrics, laminar_fraction: float) -> tuple[float, float]:
+    def _estimate_pressure_cd_v5(self, metrics: ProxyMetrics, laminar_fraction: float) -> tuple[float, float, float]:
         peak_shift = max(0.0, metrics.x_peak_area_frac - 0.50) + max(0.0, 0.18 - metrics.x_peak_area_frac)
         low_fineness = max(0.0, 2.8 - metrics.fineness_ratio)
         curvature_excess = max(0.0, metrics.recovery_curvature - 18.0)
@@ -418,7 +477,47 @@ class FairingDragProxy:
             + 0.8 * low_fineness
         )
         pressure_risk = _clip01(1.0 - np.exp(-risk_load))
-        return pressure_cd, float(pressure_risk)
+        return pressure_cd, float(pressure_risk), float(tail_transition_multiplier)
+
+    def _estimate_pressure_cd_v6(self, metrics: ProxyMetrics, transition_fraction: float) -> tuple[float, float, float]:
+        eta_a = max(metrics.area_non_monotonicity, 0.0)
+        eta_c = max(metrics.recovery_curvature, 0.0)
+        psi_rec = max(metrics.recovery_burden, 0.0)
+        x_peak = metrics.x_peak_area_frac
+        recovery_span = max(1.0 - x_peak, 1e-6)
+
+        k_r = 0.025
+        k_a = 0.028
+        k_c = 0.0012
+        k_t = 0.85
+        eta_c0 = 18.0
+
+        transition_tail_overlap = max(0.0, (transition_fraction - x_peak) / recovery_span)
+        transition_multiplier = 1.0 + k_t * transition_tail_overlap
+        curvature_excess = max(0.0, eta_c - eta_c0)
+
+        pressure_load = (
+            k_r * transition_multiplier * psi_rec
+            + k_a * eta_a
+            + k_c * curvature_excess
+        )
+        pressure_cd = float(pressure_load * (metrics.max_area / max(self.s_ref, 1e-9)))
+        pressure_risk = _clip01(
+            1.0
+            - np.exp(
+                -(
+                    1.5 * transition_multiplier * psi_rec
+                    + 5.0 * eta_a
+                    + 0.12 * curvature_excess
+                )
+            )
+        )
+        return pressure_cd, float(pressure_risk), float(transition_multiplier)
+
+    def estimate_pressure_cd(self, metrics: ProxyMetrics, laminar_fraction: float) -> tuple[float, float, float]:
+        if self.model_version == "v5":
+            return self._estimate_pressure_cd_v5(metrics, laminar_fraction)
+        return self._estimate_pressure_cd_v6(metrics, laminar_fraction)
 
     def evaluate_curves(self, curves: dict) -> dict:
         metrics = self.extract_metrics(curves)

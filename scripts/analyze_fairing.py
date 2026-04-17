@@ -50,6 +50,7 @@ def _analyze_single_case(
     flow_conditions: dict,
     preset: str,
     backend: str,
+    proxy_model: str,
     output_dir,
     report_config: dict,
     fill_missing_from_example: bool = False,
@@ -64,6 +65,7 @@ def _analyze_single_case(
         flow_conditions=flow_conditions,
         preset=preset,
         backend=backend,
+        proxy_model=proxy_model,
         include_geometry=True,
     )
     report_files = write_analysis_report_bundle(
@@ -84,6 +86,7 @@ def main() -> int:
     parser.add_argument("--out", help="報告輸出目錄")
     parser.add_argument("--preset", choices=["none", "hpa"], help="限制 preset（預設讀 analysis_config）")
     parser.add_argument("--backend", choices=["fast_proxy"], help="分析 backend（目前只支援 fast_proxy）")
+    parser.add_argument("--proxy-model", choices=["v5", "v6"], help="fast_proxy 的版本（預設讀 analysis_config）")
     parser.add_argument("--write-example-gene", metavar="PATH", help="寫出一份可直接修改的範例 gene JSON 後結束")
     parser.add_argument("--show-required-fields", action="store_true", help="列出 gene 必填欄位與建議範圍後結束")
     parser.add_argument("--fill-missing-from-example", action="store_true", help="若 gene 缺欄位，使用範例 gene 的預設值補齊")
@@ -113,6 +116,7 @@ def main() -> int:
 
     defaults = load_analysis_config(os.path.join(project_root, "config", "analysis_config.json"))
     backend = args.backend or defaults["backend"]
+    proxy_model = args.proxy_model or defaults["proxy_model"]
     preset = args.preset or defaults["preset"]
     flow_path = args.flow or os.path.join(project_root, "config", "fluid_conditions.json")
 
@@ -142,6 +146,7 @@ def main() -> int:
                         flow_conditions=flow_conditions,
                         preset=preset,
                         backend=backend,
+                        proxy_model=proxy_model,
                         output_dir=case_output_dir,
                         report_config=defaults["report"],
                         fill_missing_from_example=args.fill_missing_from_example,
@@ -183,6 +188,7 @@ def main() -> int:
 
             print("低速整流罩 batch 分析完成")
             print(f"Backend: {backend}")
+            print(f"ProxyModel: {proxy_model}")
             print(f"Preset: {preset}")
             print(f"成功案例: {success_count}")
             print(f"失敗案例: {failed_count}")
@@ -198,6 +204,7 @@ def main() -> int:
             flow_conditions=flow_conditions,
             preset=preset,
             backend=backend,
+            proxy_model=proxy_model,
             output_dir=output_dir,
             report_config=defaults["report"],
             fill_missing_from_example=args.fill_missing_from_example,
@@ -216,6 +223,7 @@ def main() -> int:
     constraint_report = analysis_result["ConstraintReport"]
     print("低速整流罩分析完成")
     print(f"Backend: {analysis_result['Backend']}")
+    print(f"ProxyModel: {analysis_result['Model']}")
     print(f"Preset: {analysis_result['PresetUsed']}")
     print(f"Drag: {analysis_result['Drag']:.4f} N")
     print(f"Cd: {analysis_result['Cd']:.6f}")

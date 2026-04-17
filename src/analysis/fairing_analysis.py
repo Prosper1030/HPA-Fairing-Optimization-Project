@@ -29,6 +29,7 @@ DEFAULT_FLOW_CONDITIONS = {
 
 DEFAULT_ANALYSIS_CONFIG = {
     "backend": "fast_proxy",
+    "proxy_model": "v6",
     "preset": "none",
     "report": {
         "output_root": "output/analysis",
@@ -254,6 +255,8 @@ def load_analysis_config(config_path: str | Path | None) -> dict:
     loaded = _load_json_file(path)
     if "backend" in loaded:
         config["backend"] = loaded["backend"]
+    if "proxy_model" in loaded:
+        config["proxy_model"] = loaded["proxy_model"]
     if "preset" in loaded:
         config["preset"] = loaded["preset"]
     if isinstance(loaded.get("report"), dict):
@@ -512,6 +515,7 @@ def analyze_gene(
     flow_conditions: dict | None = None,
     preset: str = "none",
     backend: str = "fast_proxy",
+    proxy_model: str = "v6",
     include_geometry: bool = False,
 ) -> dict:
     if backend != "fast_proxy":
@@ -527,6 +531,7 @@ def analyze_gene(
         rho=normalized_flow["rho"],
         mu=normalized_flow["mu"],
         s_ref=1.0,
+        model_version=proxy_model,
     )
     proxy_result = proxy.evaluate_curves(curves)
 
