@@ -312,6 +312,18 @@ python scripts/run_su2_mesh_study.py \
   --out output/su2_mesh_study/demo
   # 不設 --representative-limit 時，預設會取 8 個（落在 5~10 之間）
 
+# 如果要做 unattended overnight batch，可直接用 wrapper
+python scripts/run_su2_overnight_batch.py \
+  --out output/su2_overnight/demo \
+  --case-set anchor3
+
+# 想讓 overnight batch 跑完整代表案例集時，可改成 representative7
+python scripts/run_su2_overnight_batch.py \
+  --out output/su2_overnight/full_demo \
+  --case-set representative7 \
+  --profile baseline \
+  --profile fine
+
 # 如果只想跑特定 mesh profile
 python scripts/run_su2_mesh_study.py \
   --batch-summary output/analysis/batch_demo/batch_summary.json \
@@ -332,6 +344,14 @@ python scripts/run_su2_mesh_study.py \
 - `representative_manifest.md`
 
 這樣你沒有既有 gene 檔時，也能先產生一組覆蓋 `slender / short_fat / peak_forward / peak_aft / tail_aggressive / tail_conservative / mid_pack` 的驗證起點，再接到 `run_su2_mesh_study.py`。
+
+`run_su2_overnight_batch.py` 的意義是把這條 SU2 workflow 變成可重複的 family-level 驗證流程，而不是只看單一 case 的片段結果。它會：
+
+- 先自動產生代表性 gene 批次
+- 再啟動固定案例集的 SU2 mesh study
+- 留下 `overnight_manifest.json/.md` 與完整 step logs
+
+這樣隔天回來時，你會直接拿到可比較的輸出結構，而不是只知道「昨晚有在跑」。
 
 這個流程會為每個 case 產生：
 
