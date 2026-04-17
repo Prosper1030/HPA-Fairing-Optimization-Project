@@ -306,6 +306,7 @@ python scripts/run_su2_mesh_study.py \
   --representative-study \
   --representative-limit 6 \
   --out output/su2_mesh_study/demo
+  # 不設 --representative-limit 時，預設會取 8 個（落在 5~10 之間）
 
 # 如果只想跑特定 mesh profile
 python scripts/run_su2_mesh_study.py \

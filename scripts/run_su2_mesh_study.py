@@ -114,6 +114,8 @@ REPRESENTATIVE_TAG_PRIORITY = (
 )
 
 DEFAULT_REPRESENTATIVE_LIMIT = 8
+MIN_REPRESENTATIVE_LIMIT = 5
+MAX_REPRESENTATIVE_LIMIT = 10
 
 
 def _load_json(path: str | Path) -> dict:
@@ -232,9 +234,13 @@ def _load_batch_summary_candidates(
         raise AnalysisInputError(f"batch_summary 缺少 RankedCases 陣列: {path}")
 
     if representative_study:
+        if representative_limit is None:
+            representative_limit = DEFAULT_REPRESENTATIVE_LIMIT
+        if top is not None:
+            representative_limit = min(representative_limit, top)
         ranked_cases = _select_representative_ranked_cases(
             ranked_cases,
-            representative_limit if representative_limit is not None else top,
+            representative_limit,
         )
     elif top is not None:
         ranked_cases = ranked_cases[:top]
@@ -444,6 +450,7 @@ def _build_study_summary(
     flow_path: str | None,
     solver_command: str,
     selected_profiles: list[str],
+    representative_study: bool = False,
 ) -> dict:
     ready_cases = [case["SourceCaseName"] for case in cases if case["ReferenceAssessment"]["ReferenceReady"]]
     not_ready_cases = [case["SourceCaseName"] for case in cases if not case["ReferenceAssessment"]["ReferenceReady"]]
@@ -452,6 +459,7 @@ def _build_study_summary(
         "Preset": preset,
         "FlowConfig": flow_path,
         "SolverCommand": solver_command,
+        "RepresentativeStudy": representative_study,
         "CaseCount": len(cases),
         "RequestedProfiles": selected_profiles,
         "RequiredProfilesForReferenceReady": list(REFERENCE_READY_POLICY["required_profiles"]),
@@ -590,7 +598,14 @@ def main() -> int:
     parser.add_argument("--batch-summary", action="append", default=[], help="analyze_fairing.py 產出的 batch_summary.json，可重複提供")
     parser.add_argument("--top", type=int, help="搭配 --batch-summary 使用，只取前 N 名")
     parser.add_argument("--representative-study", action="store_true", help="搭配 --batch-summary 使用，自動從不同 representative tags 挑代表案例")
-    parser.add_argument("--representative-limit", type=int, help="搭配 --representative-study 使用，限制代表案例數量")
+    parser.add_argument(
+        "--representative-limit",
+        type=int,
+        help=(
+            "搭配 --representative-study 使用，限制代表案例數量（建議 "
+            f"{MIN_REPRESENTATIVE_LIMIT}~{MAX_REPRESENTATIVE_LIMIT}，預設 {DEFAULT_REPRESENTATIVE_LIMIT}）"
+        ),
+    )
     parser.add_argument("--flow", help="流體條件 JSON 檔案路徑")
     parser.add_argument("--out", required=True, help="study 輸出目錄")
     parser.add_argument("--preset", choices=["none", "hpa"], help="限制 preset（預設讀 analysis_config）")
@@ -611,6 +626,13 @@ def main() -> int:
         parser.error("--representative-limit 必須是正整數")
     if args.representative_limit is not None and not args.representative_study:
         parser.error("--representative-limit 需要搭配 --representative-study")
+    if args.representative_study and args.top is not None and args.top < MIN_REPRESENTATIVE_LIMIT:
+        parser.error(f"--top 在 --representative-study 模式下建議至少 {MIN_REPRESENTATIVE_LIMIT}")
+    if args.representative_study and args.representative_limit is not None:
+        if args.representative_limit < MIN_REPRESENTATIVE_LIMIT or args.representative_limit > MAX_REPRESENTATIVE_LIMIT:
+            parser.error(
+                f"--representative-limit 必須介於 {MIN_REPRESENTATIVE_LIMIT} 到 {MAX_REPRESENTATIVE_LIMIT} 之間"
+            )
 
     try:
         candidates = _collect_candidates(args)
@@ -693,6 +715,7 @@ def main() -> int:
             flow_path=flow_path if os.path.exists(flow_path) else None,
             solver_command=args.solver_cmd,
             selected_profiles=[name for name, _config in profiles],
+            representative_study=args.representative_study,
         )
         summary_json_path = root / "mesh_study_summary.json"
         summary_md_path = root / "mesh_study_summary.md"
