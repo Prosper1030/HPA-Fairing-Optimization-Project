@@ -172,10 +172,44 @@ class TestHighFidelityValidator(unittest.TestCase):
             self.assertAlmostEqual(result["Cd"], 0.031, places=6)
             self.assertAlmostEqual(result["Drag"], 0.802221875, places=6)
             self.assertFalse(result["Converged"])
+            self.assertFalse(result["BuiltInConverged"])
+            self.assertFalse(result["EngineeringStable"])
+            self.assertEqual(result["ConvergenceSource"], "stdout_table")
             self.assertEqual(result["TerminationReason"], "max_iterations_before_convergence")
             self.assertAlmostEqual(result["LastCauchyCd"], 2.0e-4, places=9)
             self.assertTrue(os.path.exists(os.path.join(case_dir, "su2_result.json")))
             self.assertTrue(os.path.exists(os.path.join(case_dir, "su2_result.md")))
+
+    def test_run_prepared_su2_case_uses_configured_cauchy_criterion_when_stdout_is_silent(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest = prepare_shortlist_validation_package(
+                [{"name": "alpha", "gene": self.example_gene}],
+                output_dir=temp_dir,
+            )
+            case_dir = manifest["Cases"][0]["CaseDir"]
+            mesh_path = os.path.join(case_dir, "fairing_mesh.su2")
+            with open(mesh_path, "w", encoding="utf-8") as handle:
+                handle.write("NDIME= 3\nNELEM= 0\nNPOIN= 0\nNMARK= 0\n")
+
+            history_path = os.path.join(case_dir, "history.csv")
+            with open(history_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "\"ITER\",\"DRAG\",\"FORCE_X\",\"Cauchy[CD]\"\n"
+                    "45,0.028100,-0.028100,8.0e-07\n"
+                )
+
+            solver_path = os.path.join(temp_dir, "fake_su2_silent.sh")
+            with open(solver_path, "w", encoding="utf-8") as handle:
+                handle.write("#!/bin/sh\nexit 0\n")
+            os.chmod(solver_path, 0o755)
+
+            result = run_prepared_su2_case(case_dir, solver_command=solver_path)
+
+            self.assertTrue(result["Converged"])
+            self.assertTrue(result["BuiltInConverged"])
+            self.assertTrue(result["EngineeringStable"])
+            self.assertEqual(result["ConvergenceSource"], "history_vs_config")
+            self.assertAlmostEqual(result["ConvergenceCriterion"], 1.0e-06, places=12)
 
     def test_run_prepared_su2_case_parses_real_su2_uppercase_history_columns(self):
         with tempfile.TemporaryDirectory() as temp_dir:

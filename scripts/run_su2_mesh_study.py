@@ -205,13 +205,14 @@ def _build_study_markdown(summary: dict) -> str:
     lines.extend(
         [
             "",
-            "| Profile | Converged | Nodes | Tetra | Cd | Drag (N) | ΔCd vs proxy | ΔCd vs prev | Last Cauchy CD | Cd Swing(Last10) |",
-            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "| Profile | Converged | Source | Nodes | Tetra | Cd | Drag (N) | ΔCd vs proxy | ΔCd vs prev | Last Cauchy CD | Cd Swing(Last10) |",
+            "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
 
     for entry in summary["Profiles"]:
-        converged = "yes" if entry.get("Converged") else "no"
+        converged = "n/a" if entry.get("Converged") is None else ("yes" if entry["Converged"] else "no")
+        source_text = entry.get("ConvergenceSource") or "n/a"
         delta_cd = entry.get("DeltaCdVsPreviousPercent")
         delta_proxy = entry.get("DeltaCdVsProxyPercent")
         delta_text = "n/a" if delta_cd is None else f"{delta_cd:+.3f}%"
@@ -221,7 +222,7 @@ def _build_study_markdown(summary: dict) -> str:
         cd_text = "n/a" if entry.get("Cd") is None else f"{entry['Cd']:.6f}"
         drag_text = "n/a" if entry.get("Drag") is None else f"{entry['Drag']:.6f}"
         lines.append(
-            f"| {entry['Profile']} | {converged} | {entry.get('Nodes', 'n/a')} | {entry.get('VolumeElements', 'n/a')} | "
+            f"| {entry['Profile']} | {converged} | {source_text} | {entry.get('Nodes', 'n/a')} | {entry.get('VolumeElements', 'n/a')} | "
             f"{cd_text} | {drag_text} | {delta_proxy_text} | {delta_text} | {cauchy_text} | {swing_text} |"
         )
 
@@ -285,6 +286,9 @@ def main() -> int:
                 "Cd": case_result.get("Cd"),
                 "Drag": case_result.get("Drag"),
                 "Converged": case_result.get("Converged"),
+                "BuiltInConverged": case_result.get("BuiltInConverged"),
+                "EngineeringStable": case_result.get("EngineeringStable"),
+                "ConvergenceSource": case_result.get("ConvergenceSource"),
                 "TerminationReason": case_result.get("TerminationReason"),
                 "LastCauchyCd": case_result.get("LastCauchyCd"),
                 "CdSwingPercentLast10": case_result.get("CdSwingPercentLast10"),

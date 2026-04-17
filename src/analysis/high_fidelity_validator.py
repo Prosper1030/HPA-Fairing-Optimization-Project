@@ -68,6 +68,11 @@ DEFAULT_SU2_RUNTIME_SETTINGS = {
     "history_output": "(ITER, RMS_RES, CAUCHY, AERO_COEFF)",
 }
 
+DEFAULT_SU2_CONVERGENCE_POLICY = {
+    "cd_swing_percent_last10_max": 0.2,
+    "min_tail_samples": 5,
+}
+
 AXISYMMETRIC_BENCHMARK_SU2_SETTINGS = {
     "iterations": 400,
     "inner_iterations": 400,
@@ -367,6 +372,12 @@ def _build_su2_result_markdown(result: dict) -> str:
         lines.append(f"- ForceX: {result['ForceX']:.6f}")
     if result.get("Converged") is not None:
         lines.append(f"- Converged: {'yes' if result['Converged'] else 'no'}")
+    if result.get("BuiltInConverged") is not None:
+        lines.append(f"- BuiltInConverged: {'yes' if result['BuiltInConverged'] else 'no'}")
+    if result.get("EngineeringStable") is not None:
+        lines.append(f"- EngineeringStable: {'yes' if result['EngineeringStable'] else 'no'}")
+    if result.get("ConvergenceSource"):
+        lines.append(f"- ConvergenceSource: {result['ConvergenceSource']}")
     if result.get("TerminationReason"):
         lines.append(f"- TerminationReason: {result['TerminationReason']}")
     if result.get("LastCauchyCd") is not None:
@@ -851,12 +862,21 @@ def _parse_stdout_convergence(stdout: str) -> dict:
     if "before convergence" in lowered:
         termination_reason = "max_iterations_before_convergence"
         converged = False
-    elif "exit success" in lowered and "before convergence" not in lowered:
+    elif (
+        ("exit success" in lowered or "all convergence criteria satisfied" in lowered)
+        and "before convergence" not in lowered
+    ):
         termination_reason = "completed"
 
-    match = re.search(
+    matches = list(
+        re.finditer(
         r"\|\s*(?P<field>[^|]+?)\|\s*(?P<value>[-+0-9.eE]+)\|\s*(?P<criterion><\s*[-+0-9.eE]+)\|\s*(?P<flag>Yes|No)\|",
         stdout,
+        )
+    )
+    match = next(
+        (candidate for candidate in matches if "cauchy" in candidate.group("field").lower()),
+        matches[0] if matches else None,
     )
     if match:
         converged = match.group("flag") == "Yes"
@@ -891,7 +911,7 @@ def _history_convergence_metrics(rows: list[dict]) -> dict:
     if trailing_cd:
         cd_mean_last10 = float(np.mean(trailing_cd))
         cd_last = trailing_cd[-1]
-        if abs(cd_last) > 1e-12:
+        if len(trailing_cd) >= 2 and abs(cd_last) > 1e-12:
             cd_swing_percent = ((max(trailing_cd) - min(trailing_cd)) / abs(cd_last)) * 100.0
 
     last_row = rows[-1]
@@ -899,10 +919,113 @@ def _history_convergence_metrics(rows: list[dict]) -> dict:
         "LastCauchyCd": _lookup_metric(last_row, "Cauchy[CD]", "CAUCHY[CD]"),
         "CdSwingPercentLast10": cd_swing_percent,
         "CdMeanLast10": cd_mean_last10,
+        "CdSampleCount": len(cd_values),
+        "CdSampleCountLast10": len(trailing_cd),
         "ResidualPressure": _lookup_metric(last_row, 'rms[P]', 'RMS_PRESSURE'),
         "ResidualU": _lookup_metric(last_row, 'rms[U]', 'RMS_VELOCITY-X'),
         "ResidualV": _lookup_metric(last_row, 'rms[V]', 'RMS_VELOCITY-Y'),
         "ResidualW": _lookup_metric(last_row, 'rms[W]', 'RMS_VELOCITY-Z'),
+    }
+
+
+def _read_convergence_targets(config_path: Path) -> dict:
+    targets = {
+        "ConvergenceField": None,
+        "ConvergenceCriterion": None,
+        "ConvergenceStartIter": None,
+        "ConvergenceElements": None,
+    }
+    for key, raw_line in _read_config_entries(config_path):
+        if key is None:
+            continue
+        value_text = raw_line.split("=", 1)[1].split("%", 1)[0].strip()
+        if key == "CONV_FIELD":
+            targets["ConvergenceField"] = value_text.strip("() ")
+        elif key == "CONV_CAUCHY_EPS":
+            targets["ConvergenceCriterion"] = _parse_float(value_text)
+        elif key == "CONV_STARTITER":
+            parsed = _parse_float(value_text)
+            targets["ConvergenceStartIter"] = None if parsed is None else int(parsed)
+        elif key == "CONV_CAUCHY_ELEMS":
+            parsed = _parse_float(value_text)
+            targets["ConvergenceElements"] = None if parsed is None else int(parsed)
+    return targets
+
+
+def _assess_convergence(
+    *,
+    stdout_convergence: dict,
+    history_metrics: dict,
+    convergence_targets: dict,
+    iterations: int | None,
+) -> dict:
+    builtin_converged = stdout_convergence["Converged"]
+    convergence_source = None
+
+    if builtin_converged is not None:
+        convergence_source = "stdout_table"
+    else:
+        criterion = (
+            stdout_convergence["ConvergenceCriterion"]
+            if stdout_convergence["ConvergenceCriterion"] is not None
+            else convergence_targets["ConvergenceCriterion"]
+        )
+        last_cauchy = (
+            stdout_convergence["LastCauchyCd"]
+            if stdout_convergence["LastCauchyCd"] is not None
+            else history_metrics["LastCauchyCd"]
+        )
+        start_iter = convergence_targets["ConvergenceStartIter"]
+        cauchy_elems = convergence_targets["ConvergenceElements"]
+        enough_iterations = True
+        if iterations is not None and start_iter is not None and cauchy_elems is not None:
+            enough_iterations = iterations >= (start_iter + cauchy_elems)
+        if criterion is not None and last_cauchy is not None and enough_iterations:
+            builtin_converged = float(last_cauchy) <= float(criterion)
+            convergence_source = "history_vs_config"
+
+    checks = []
+    if builtin_converged is not None:
+        checks.append(
+            {
+                "name": "su2_builtin_cauchy",
+                "pass": bool(builtin_converged),
+                "value": builtin_converged,
+                "required": True,
+                "source": convergence_source,
+            }
+        )
+
+    cd_swing_limit = float(DEFAULT_SU2_CONVERGENCE_POLICY["cd_swing_percent_last10_max"])
+    cd_swing = history_metrics["CdSwingPercentLast10"]
+    tail_samples = int(history_metrics.get("CdSampleCountLast10") or 0)
+    min_tail_samples = int(DEFAULT_SU2_CONVERGENCE_POLICY["min_tail_samples"])
+    if cd_swing is not None and tail_samples >= min_tail_samples:
+        checks.append(
+            {
+                "name": "cd_swing_last10",
+                "pass": float(cd_swing) <= cd_swing_limit,
+                "value": float(cd_swing),
+                "required": False,
+                "threshold": cd_swing_limit,
+                "samples": tail_samples,
+            }
+        )
+
+    engineering_stable = None
+    if checks:
+        engineering_stable = all(check["pass"] for check in checks if check["pass"] is not None)
+
+    converged = builtin_converged if builtin_converged is not None else engineering_stable
+    if convergence_source is None and engineering_stable is not None:
+        convergence_source = "engineering_fallback"
+
+    return {
+        "Converged": converged,
+        "BuiltInConverged": builtin_converged,
+        "EngineeringStable": engineering_stable,
+        "ConvergenceSource": convergence_source,
+        "Checks": checks,
     }
 
 
@@ -998,10 +1121,13 @@ def run_prepared_su2_case(
     drag_force = None if cd is None else float(cd) * dynamic_pressure * ref_area
     history_metrics = _history_convergence_metrics(rows)
     stdout_convergence = _parse_stdout_convergence(completed.stdout)
-
-    converged = stdout_convergence["Converged"]
-    if converged is None and history_metrics["CdSwingPercentLast10"] is not None:
-        converged = history_metrics["CdSwingPercentLast10"] <= 0.5
+    convergence_targets = _read_convergence_targets(runtime_config_path)
+    convergence_assessment = _assess_convergence(
+        stdout_convergence=stdout_convergence,
+        history_metrics=history_metrics,
+        convergence_targets=convergence_targets,
+        iterations=None if iter_value is None else int(iter_value),
+    )
 
     result = {
         "CaseName": case_path.name,
@@ -1016,10 +1142,22 @@ def run_prepared_su2_case(
         "Cd": cd,
         "Drag": drag_force,
         "ForceX": force_x,
-        "Converged": converged,
+        "Converged": convergence_assessment["Converged"],
+        "BuiltInConverged": convergence_assessment["BuiltInConverged"],
+        "EngineeringStable": convergence_assessment["EngineeringStable"],
+        "ConvergenceSource": convergence_assessment["ConvergenceSource"],
+        "ConvergenceChecks": convergence_assessment["Checks"],
         "TerminationReason": stdout_convergence["TerminationReason"],
-        "ConvergenceField": stdout_convergence["ConvergenceField"],
-        "ConvergenceCriterion": stdout_convergence["ConvergenceCriterion"],
+        "ConvergenceField": (
+            stdout_convergence["ConvergenceField"]
+            if stdout_convergence["ConvergenceField"] is not None
+            else convergence_targets["ConvergenceField"]
+        ),
+        "ConvergenceCriterion": (
+            stdout_convergence["ConvergenceCriterion"]
+            if stdout_convergence["ConvergenceCriterion"] is not None
+            else convergence_targets["ConvergenceCriterion"]
+        ),
         "LastCauchyCd": (
             stdout_convergence["LastCauchyCd"]
             if stdout_convergence["LastCauchyCd"] is not None
@@ -1027,6 +1165,8 @@ def run_prepared_su2_case(
         ),
         "CdSwingPercentLast10": history_metrics["CdSwingPercentLast10"],
         "CdMeanLast10": history_metrics["CdMeanLast10"],
+        "CdSampleCount": history_metrics["CdSampleCount"],
+        "CdSampleCountLast10": history_metrics["CdSampleCountLast10"],
         "ResidualPressure": history_metrics["ResidualPressure"],
         "ResidualU": history_metrics["ResidualU"],
         "ResidualV": history_metrics["ResidualV"],

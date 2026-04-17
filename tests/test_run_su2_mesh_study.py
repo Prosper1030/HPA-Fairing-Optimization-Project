@@ -82,6 +82,8 @@ class TestRunSU2MeshStudy(unittest.TestCase):
             self.assertEqual(len(payload["Profiles"]), 1)
             self.assertEqual(payload["Profiles"][0]["Profile"], "coarse")
             self.assertTrue(payload["Profiles"][0]["Converged"])
+            self.assertEqual(payload["Profiles"][0]["ConvergenceSource"], "stdout_table")
+            self.assertEqual(payload["Profiles"][0]["TerminationReason"], "completed")
             self.assertGreater(payload["Profiles"][0]["Nodes"], 0)
             self.assertGreater(payload["Profiles"][0]["VolumeElements"], 0)
 
