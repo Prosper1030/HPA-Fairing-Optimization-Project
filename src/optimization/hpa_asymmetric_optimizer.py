@@ -70,6 +70,7 @@ class ProjectManager:
         self.log_file = self.log_dir / "optimization_log.txt"
         self.results_file = self.log_dir / "results.json"
         self.best_gene_file = self.log_dir / "best_gene.json"
+        self.candidate_scores_file = self.log_dir / "candidate_scores.jsonl"
 
         self.log(f"創建運行目錄: {self.run_dir}")
 
@@ -105,6 +106,21 @@ class ProjectManager:
         """保存最終結果摘要"""
         with open(self.results_file, 'w', encoding='utf-8') as f:
             json.dump(payload, f, indent=2, ensure_ascii=False)
+
+    def record_candidate(self, gene: Dict, score: float, generation: int, individual: int, analysis_mode: str):
+        """追加記錄每個已評估候選，供後續 shortlist 與追蹤使用。"""
+        payload = {
+            'name': f'gen{generation:03d}_ind{individual:03d}',
+            'generation': generation,
+            'individual': individual,
+            'score': float(score),
+            'analysis_mode': analysis_mode,
+            'timestamp': datetime.now().isoformat(),
+            'gene': {key: float(value) for key, value in gene.items()},
+        }
+        with open(self.candidate_scores_file, 'a', encoding='utf-8') as f:
+            json.dump(payload, f, ensure_ascii=False)
+            f.write('\n')
 
     def get_vsp_path(self, name: str) -> str:
         """獲取 VSP 檔案路徑"""

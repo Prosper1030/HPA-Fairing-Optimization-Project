@@ -28,6 +28,8 @@ from _bootstrap import ensure_src_path
 
 project_root = os.fspath(ensure_src_path())
 
+from analysis import prepare_shortlist_validation_package
+
 # 導入優化器模組
 from optimization.hpa_asymmetric_optimizer import (
     HPA_Optimizer, ProjectManager, CST_Modeler
@@ -117,6 +119,89 @@ def save_checkpoint(pm, callback, algorithm, convergence_history, best_so_far,
     temp_path.replace(checkpoint_path)
 
 
+def build_su2_shortlist_candidates(pm, top_n: int):
+    if top_n <= 0:
+        raise ValueError("su2 shortlist top_n 必須大於 0")
+
+    if not pm.candidate_scores_file.exists():
+        return []
+
+    entries = []
+    with open(pm.candidate_scores_file, "r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            payload = json.loads(line)
+            if float(payload.get("score", 1e6)) >= 1e5:
+                continue
+            gene = payload.get("gene")
+            if not isinstance(gene, dict):
+                continue
+            entries.append(payload)
+
+    entries.sort(
+        key=lambda item: (
+            float(item["score"]),
+            int(item.get("generation", 0)),
+            int(item.get("individual", 0)),
+        )
+    )
+
+    seen_genes = set()
+    candidates = []
+    keys = list(HPA_Optimizer.GENE_BOUNDS.keys())
+    for entry in entries:
+        gene = entry["gene"]
+        gene_key = tuple(round(float(gene[key]), 8) for key in keys)
+        if gene_key in seen_genes:
+            continue
+        seen_genes.add(gene_key)
+        rank = len(candidates) + 1
+        candidates.append(
+            {
+                "name": f"rank_{rank:02d}_{entry['name']}",
+                "gene": gene,
+                "Notes": {
+                    "score": float(entry["score"]),
+                    "generation": int(entry.get("generation", 0)),
+                    "individual": int(entry.get("individual", 0)),
+                    "analysis_mode": entry.get("analysis_mode"),
+                    "selection_source": str(pm.candidate_scores_file),
+                },
+            }
+        )
+        if len(candidates) >= top_n:
+            break
+
+    return candidates
+
+
+def prepare_ga_su2_shortlist(pm, *, top_n: int, flow_conditions: dict, output_dir: str | None = None):
+    candidates = build_su2_shortlist_candidates(pm, top_n)
+    if not candidates:
+        pm.log("沒有可用的有效候選，跳過 SU2 shortlist 工作包")
+        return None
+
+    shortlist_dir = Path(output_dir) if output_dir else pm.run_dir / "su2_shortlist"
+    manifest = prepare_shortlist_validation_package(
+        candidates,
+        output_dir=shortlist_dir,
+        flow_conditions=flow_conditions,
+        preset="hpa",
+    )
+    pm.log(f"SU2 shortlist 工作包已建立: {manifest['ManifestFiles']['json']}")
+    return {
+        "prepared": True,
+        "top_n_requested": top_n,
+        "case_count": manifest["CaseCount"],
+        "output_dir": str(shortlist_dir),
+        "manifest_json": manifest["ManifestFiles"]["json"],
+        "manifest_markdown": manifest["ManifestFiles"]["markdown"],
+        "run_script": manifest["RunScript"],
+    }
+
+
 def call_worker(
     gene_dict: dict,
     name: str,
@@ -184,17 +269,21 @@ def evaluate_population_parallel(
 
         for future in as_completed(future_to_index):
             index = future_to_index[future]
+            gene_dict, _, _, _, _ = tasks[index]
             try:
                 ordered_fitness[index] = future.result()
             except Exception as e:
                 pm.log(str(e))
                 ordered_fitness[index] = 1e6
+            pm.record_candidate(gene_dict, ordered_fitness[index], gen, index, analysis_mode)
 
         fitness.extend(ordered_fitness)
     else:
         # 單執行緒模式：使用 HPA_Optimizer（穩定版）
         for i, gene_array in enumerate(population):
+            gene_dict = {k: gene_array[j] for j, k in enumerate(keys)}
             f = optimizer.evaluate_individual(gene_array, gen, i)
+            pm.record_candidate(gene_dict, f, gen, i, analysis_mode)
             fitness.append(f)
 
     return np.array(fitness)
@@ -249,6 +338,11 @@ def run_optimization(args):
     # 讀取面積懲罰因子
     W_area_penalty = config.get('fitness', {}).get('W_area_penalty', 0.1)
     analysis_mode = args.analysis_mode or config.get('fitness', {}).get('analysis_mode', 'proxy')
+    prepare_su2_shortlist = bool(getattr(args, 'prepare_su2_shortlist', False))
+    su2_shortlist_top = int(getattr(args, 'su2_shortlist_top', 5) or 5)
+    su2_shortlist_out = getattr(args, 'su2_shortlist_out', None)
+    if su2_shortlist_top <= 0:
+        raise ValueError("su2 shortlist top 必須大於 0")
     flow_block = fluid.get('flow_conditions', {})
     flow_conditions = {
         'velocity': flow_block.get('velocity', {}).get('value', 6.5),
@@ -267,6 +361,7 @@ def run_optimization(args):
     print(f"評估模式: {analysis_mode}")
     print(f"適應度公式: Score = Drag + {W_area_penalty} × Swet")
     print(f"平行運算: {n_workers} 進程" + (f"（可用上限: {max_workers}）" if n_workers > 1 else ""))
+    print(f"SU2 shortlist: {'ON' if prepare_su2_shortlist else 'OFF'}" + (f"（top {su2_shortlist_top}）" if prepare_su2_shortlist else ""))
     if checkpoint:
         print(f"續跑模式: 從第 {start_generation} 代繼續到第 {n_gen} 代")
     print(f"{'='*60}\n")
@@ -486,8 +581,16 @@ def run_optimization(args):
         flow_conditions=flow_conditions,
         return_details=True,
     )
+    su2_shortlist_summary = None
+    if prepare_su2_shortlist:
+        su2_shortlist_summary = prepare_ga_su2_shortlist(
+            pm,
+            top_n=su2_shortlist_top,
+            flow_conditions=flow_conditions,
+            output_dir=su2_shortlist_out,
+        )
     pm.save_best_gene(best_gene, best_fitness, callback.n_gen, analysis=best_analysis)
-    pm.save_results({
+    results_payload = {
         'best_gene': best_gene,
         'best_fitness': best_fitness,
         'generation': callback.n_gen,
@@ -495,7 +598,10 @@ def run_optimization(args):
         'best_analysis': best_analysis,
         'elapsed_seconds': elapsed,
         'timestamp': datetime.now().isoformat(),
-    })
+    }
+    if su2_shortlist_summary is not None:
+        results_payload['su2_shortlist'] = su2_shortlist_summary
+    pm.save_results(results_payload)
 
     # 最終保存收斂歷史
     with open(pm.log_dir / 'convergence_history.json', 'w', encoding='utf-8') as f:
@@ -536,6 +642,8 @@ def run_optimization(args):
     pm.log(f"最佳基因: {pm.log_dir / 'best_gene.json'}")
     pm.log(f"分析摘要: {pm.results_file}")
     pm.log(f"收斂曲線: {pm.log_dir / 'convergence.png'}")
+    if su2_shortlist_summary is not None:
+        pm.log(f"SU2 shortlist: {su2_shortlist_summary['manifest_json']}")
     pm.log(f"{'='*60}")
 
     return res, pm, convergence_history
@@ -557,6 +665,12 @@ def main():
                         help='完成後匯出最佳解的 .vsp3 模型（預設關閉）')
     parser.add_argument('--skip-final-vsp', action='store_true',
                         help='強制跳過最佳解的最終 .vsp3 匯出（保留舊介面）')
+    parser.add_argument('--prepare-su2-shortlist', action='store_true',
+                        help='完成後自動從 GA 候選建立 SU2 shortlist 工作包')
+    parser.add_argument('--su2-shortlist-top', type=int, default=5,
+                        help='建立 SU2 shortlist 時保留前 N 名候選（預設 5）')
+    parser.add_argument('--su2-shortlist-out', type=str,
+                        help='SU2 shortlist 輸出目錄（預設為 <run_dir>/su2_shortlist）')
 
     args = parser.parse_args()
 

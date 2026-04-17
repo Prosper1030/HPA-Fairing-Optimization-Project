@@ -39,6 +39,9 @@ class TestRunGaProxy(unittest.TestCase):
             analysis_mode=None,
             final_vsp=False,
             skip_final_vsp=False,
+            prepare_su2_shortlist=False,
+            su2_shortlist_top=5,
+            su2_shortlist_out=None,
         )
 
         result = run_ga.run_optimization(args)
@@ -57,6 +60,53 @@ class TestRunGaProxy(unittest.TestCase):
             self.assertIn("Cd", results_payload["best_analysis"])
             self.assertIn("analysis", best_gene_payload)
             self.assertEqual(best_gene_payload["analysis"]["AnalysisMode"], "proxy")
+            self.assertTrue(os.path.exists(pm.candidate_scores_file))
+        finally:
+            shutil.rmtree(pm.run_dir, ignore_errors=True)
+
+    def test_run_ga_proxy_can_prepare_su2_shortlist_bundle(self):
+        args = argparse.Namespace(
+            gen=1,
+            pop=4,
+            seed=11,
+            tol=1,
+            workers=1,
+            config=os.path.join(PROJECT_ROOT, "config", "ga_config.json"),
+            fluid=os.path.join(PROJECT_ROOT, "config", "fluid_conditions.json"),
+            resume=None,
+            analysis_mode=None,
+            final_vsp=False,
+            skip_final_vsp=False,
+            prepare_su2_shortlist=True,
+            su2_shortlist_top=2,
+            su2_shortlist_out=None,
+        )
+
+        result = run_ga.run_optimization(args)
+        self.assertIsNotNone(result)
+        _, pm, _ = result
+
+        try:
+            with open(pm.results_file, "r", encoding="utf-8") as handle:
+                results_payload = json.load(handle)
+
+            shortlist = results_payload["su2_shortlist"]
+            self.assertTrue(shortlist["prepared"])
+            self.assertEqual(shortlist["top_n_requested"], 2)
+            self.assertTrue(os.path.exists(shortlist["manifest_json"]))
+            self.assertTrue(os.path.exists(shortlist["run_script"]))
+
+            with open(shortlist["manifest_json"], "r", encoding="utf-8") as handle:
+                manifest_payload = json.load(handle)
+
+            self.assertGreaterEqual(manifest_payload["CaseCount"], 1)
+            self.assertLessEqual(manifest_payload["CaseCount"], 2)
+            self.assertEqual(manifest_payload["Preset"], "hpa")
+            self.assertTrue(
+                os.path.exists(
+                    os.path.join(manifest_payload["Cases"][0]["CaseDir"], "su2_case.cfg")
+                )
+            )
         finally:
             shutil.rmtree(pm.run_dir, ignore_errors=True)
 
