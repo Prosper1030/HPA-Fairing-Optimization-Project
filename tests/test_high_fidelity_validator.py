@@ -80,6 +80,7 @@ class TestHighFidelityValidator(unittest.TestCase):
             self.assertIn('drawAxisLine(origin, py, "#2f9e44", "Y")', preview_html)
             self.assertIn('drawAxisLine(origin, pz, "#1c7ed6", "Z")', preview_html)
             self.assertIn('applyPreset(preset.value || "isometric")', preview_html)
+            self.assertNotIn('ctx.strokeStyle = "rgba(28, 35, 45, 0.6)"', preview_html)
             payload_match = re.search(r"const geometry = (\{.*?\});", preview_html, re.DOTALL)
             self.assertIsNotNone(payload_match)
             geometry_payload = json.loads(payload_match.group(1))

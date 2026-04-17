@@ -414,7 +414,7 @@ class CST_Modeler:
         )
 
     @staticmethod
-    def _piecewise_bezier_curve(
+    def _shape_preserving_curve(
         psi: np.ndarray,
         split_position: float,
         start_value: float,
@@ -422,74 +422,102 @@ class CST_Modeler:
         end_value: float,
         left_ctrl: tuple[float, float],
         right_ctrl: tuple[float, float],
+        *,
+        left_positions: tuple[float, float] = (0.32, 0.74),
+        right_positions: tuple[float, float] = (0.28, 0.72),
     ) -> np.ndarray:
         """
-        用兩段三次 Bezier 組成一條在 split station 具有明確幾何語義的縱向曲線。
+        用 support points + PCHIP 生成 shape-preserving 的縱向曲線。
 
-        這個 helper 讓 peak station / tail endpoint 都直接由參數定義，
-        不再依賴 legacy 的 remap + discrete normalization。
+        與直接拼兩段 cubic Bezier 相比，這裡的 peak station 會以 C1 方式
+        平滑接續，不容易在最大截面位置形成視覺稜線。
         """
         split = float(np.clip(split_position, 1e-3, 1.0 - 1e-3))
-        curve = np.zeros_like(psi, dtype=float)
+        left_pos = np.clip(np.asarray(left_positions, dtype=float), 1e-3, 0.98)
+        right_pos = np.clip(np.asarray(right_positions, dtype=float), 1e-3, 0.98)
+        left_pos = np.sort(left_pos)
+        right_pos = np.sort(right_pos)
 
-        left_mask = psi <= split
-        if np.any(left_mask):
-            u_left = np.clip(psi[left_mask] / split, 0.0, 1.0)
-            curve[left_mask] = CST_Modeler._bezier_cubic(
-                u_left,
+        support_x = np.array(
+            [
+                0.0,
+                split * left_pos[0],
+                split * left_pos[1],
+                split,
+                split + (1.0 - split) * right_pos[0],
+                split + (1.0 - split) * right_pos[1],
+                1.0,
+            ],
+            dtype=float,
+        )
+        support_y = np.array(
+            [
                 float(start_value),
                 float(left_ctrl[0]),
                 float(left_ctrl[1]),
                 float(split_value),
-            )
-
-        right_mask = ~left_mask
-        if np.any(right_mask):
-            u_right = np.clip((psi[right_mask] - split) / (1.0 - split), 0.0, 1.0)
-            curve[right_mask] = CST_Modeler._bezier_cubic(
-                u_right,
-                float(split_value),
                 float(right_ctrl[0]),
                 float(right_ctrl[1]),
                 float(end_value),
-            )
-
-        return curve
+            ],
+            dtype=float,
+        )
+        interpolator = PchipInterpolator(support_x, support_y, extrapolate=False)
+        curve = interpolator(np.clip(psi, 0.0, 1.0))
+        return np.asarray(curve, dtype=float)
 
     @staticmethod
     def _build_width_curve(psi: np.ndarray, gene: Dict, peak_position: float) -> np.ndarray:
         width_peak = max(float(gene['W_max']) * 0.5, 1e-6)
-        left_1 = width_peak * float(np.clip(gene['width_le_ctrl_1'], 0.0, 0.98))
-        left_2 = width_peak * float(np.clip(gene['width_le_ctrl_2'], 0.0, 0.98))
-        right_1 = width_peak * float(np.clip(gene['width_te_ctrl_1'], 0.0, 0.98))
-        right_2 = width_peak * float(np.clip(gene['width_te_ctrl_2'], 0.0, 0.98))
+        left_values = sorted(
+            [
+                width_peak * float(np.clip(gene['width_le_ctrl_1'], 0.0, 0.98)),
+                width_peak * float(np.clip(gene['width_le_ctrl_2'], 0.0, 0.98)),
+            ]
+        )
+        right_values = sorted(
+            [
+                width_peak * float(np.clip(gene['width_te_ctrl_1'], 0.0, 0.98)),
+                width_peak * float(np.clip(gene['width_te_ctrl_2'], 0.0, 0.98)),
+            ],
+            reverse=True,
+        )
 
-        return CST_Modeler._piecewise_bezier_curve(
+        return CST_Modeler._shape_preserving_curve(
             psi,
             peak_position,
             0.0,
             width_peak,
             0.0,
-            (left_1, left_2),
-            (right_1, right_2),
+            (left_values[0], left_values[1]),
+            (right_values[0], right_values[1]),
         )
 
     @staticmethod
     def _build_thickness_curve(psi: np.ndarray, gene: Dict, peak_position: float) -> np.ndarray:
         thickness_peak = max(float(gene['H_max']), 1e-6)
-        left_1 = thickness_peak * float(np.clip(gene['height_le_ctrl_1'], 0.0, 0.98))
-        left_2 = thickness_peak * float(np.clip(gene['height_le_ctrl_2'], 0.0, 0.98))
-        right_1 = thickness_peak * float(np.clip(gene['height_te_ctrl_1'], 0.0, 0.98))
-        right_2 = thickness_peak * float(np.clip(gene['height_te_ctrl_2'], 0.0, 0.98))
+        left_values = sorted(
+            [
+                thickness_peak * float(np.clip(gene['height_le_ctrl_1'], 0.0, 0.98)),
+                thickness_peak * float(np.clip(gene['height_le_ctrl_2'], 0.0, 0.98)),
+            ]
+        )
+        right_values = sorted(
+            [
+                thickness_peak * float(np.clip(gene['height_te_ctrl_1'], 0.0, 0.98)),
+                thickness_peak * float(np.clip(gene['height_te_ctrl_2'], 0.0, 0.98)),
+            ],
+            reverse=True,
+        )
 
-        return CST_Modeler._piecewise_bezier_curve(
+        return CST_Modeler._shape_preserving_curve(
             psi,
             peak_position,
             0.0,
             thickness_peak,
             0.0,
-            (left_1, left_2),
-            (right_1, right_2),
+            (left_values[0], left_values[1]),
+            (right_values[0], right_values[1]),
         )
 
     @staticmethod
@@ -512,7 +540,7 @@ class CST_Modeler:
         right_1 = peak_center + right_1_ratio * (tail_z - peak_center)
         right_2 = peak_center + right_2_ratio * (tail_z - peak_center)
 
-        return CST_Modeler._piecewise_bezier_curve(
+        return CST_Modeler._shape_preserving_curve(
             psi,
             peak_position,
             0.0,

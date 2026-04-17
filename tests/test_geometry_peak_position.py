@@ -101,6 +101,44 @@ class TestGeometryPeakPosition(unittest.TestCase):
         self.assertAlmostEqual(float(curves["z_lower"][-1]), gene["tail_rise"], places=8)
         self.assertTrue(np.all(curves["super_height"] >= -1e-10))
 
+    def test_peak_station_is_locally_smooth_in_width_and_thickness(self):
+        gene = {
+            "L": 3.0,
+            "W_max": 0.49,
+            "H_top_max": 0.85,
+            "H_bot_max": 0.25,
+            "N1": 0.5,
+            "N2_top": 0.75,
+            "N2_bot": 0.80,
+            "X_max_pos": 0.49,
+            "X_offset": 0.7,
+            "M_top": 3.9,
+            "N_top": 2.5,
+            "M_bot": 3.9,
+            "N_bot": 2.5,
+            "tail_rise": 0.18,
+            "blend_start": 0.84,
+            "blend_power": 2.9,
+            "w0": 0.17,
+            "w1": 0.25,
+            "w2": 0.39,
+            "w3": 0.19,
+        }
+
+        curves = CST_Modeler.generate_asymmetric_fairing(gene, num_sections=160)
+        x_coords = np.asarray(curves["x"], dtype=float)
+
+        for key, threshold in (("width_half", 0.06), ("super_height", 0.10)):
+            values = np.asarray(curves[key], dtype=float)
+            peak_idx = int(np.argmax(values))
+            left_slope = (values[peak_idx] - values[peak_idx - 1]) / (x_coords[peak_idx] - x_coords[peak_idx - 1])
+            right_slope = (values[peak_idx + 1] - values[peak_idx]) / (x_coords[peak_idx + 1] - x_coords[peak_idx])
+            central_slope = (values[peak_idx + 1] - values[peak_idx - 1]) / (x_coords[peak_idx + 1] - x_coords[peak_idx - 1])
+
+            self.assertGreater(left_slope, 0.0, msg=key)
+            self.assertLess(right_slope, 0.0, msg=key)
+            self.assertLess(abs(central_slope), threshold, msg=key)
+
 
 if __name__ == "__main__":
     unittest.main()

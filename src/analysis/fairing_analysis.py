@@ -40,6 +40,30 @@ DEFAULT_ANALYSIS_CONFIG = {
     },
 }
 
+DEFAULT_EXAMPLE_GENE = {
+    "L": 2.5,
+    "W_max": 0.60,
+    "H_max": 1.30,
+    "camber_peak": 0.30,
+    "X_peak": 0.32,
+    "X_offset": 0.70,
+    "width_le_ctrl_1": 0.22,
+    "width_le_ctrl_2": 0.64,
+    "width_te_ctrl_1": 0.86,
+    "width_te_ctrl_2": 0.28,
+    "height_le_ctrl_1": 0.36,
+    "height_le_ctrl_2": 0.752,
+    "height_te_ctrl_1": 0.84,
+    "height_te_ctrl_2": 0.30,
+    "centerline_te_ctrl_1": 0.12,
+    "centerline_te_ctrl_2": 0.45,
+    "tail_z": 0.02,
+    "M_top": 2.5,
+    "N_top": 2.5,
+    "M_bot": 2.5,
+    "N_bot": 2.5,
+}
+
 DEFAULT_EXAMPLE_GENE_LEGACY = {
     "L": 2.5,
     "W_max": 0.60,
@@ -272,7 +296,7 @@ def get_gene_field_bounds() -> dict[str, tuple[float, float]]:
 
 
 def get_example_gene() -> dict:
-    return normalize_gene(DEFAULT_EXAMPLE_GENE_LEGACY)
+    return dict(DEFAULT_EXAMPLE_GENE)
 
 
 def get_representative_gene_cases() -> list[dict]:

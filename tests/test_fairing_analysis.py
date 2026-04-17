@@ -354,10 +354,11 @@ class TestFairingAnalysis(unittest.TestCase):
             self.assertEqual(payload["FailedCases"], 0)
             self.assertEqual(len(payload["RankedCases"]), 2)
             self.assertEqual(payload["RankedCases"][0]["Rank"], 1)
-            self.assertTrue(payload["RankedCases"][1]["FilledFields"])
             self.assertIn("RepresentativeTags", payload["RankedCases"][0])
             self.assertIn("GeometryTraits", payload["RankedCases"][0])
-            self.assertIn("peak_aft", payload["RankedCases"][1]["RepresentativeTags"])
+            gene_b_entry = next(entry for entry in payload["RankedCases"] if entry["CaseName"] == "gene_b")
+            self.assertTrue(gene_b_entry["FilledFields"])
+            self.assertIn("peak_aft", gene_b_entry["RepresentativeTags"])
 
 
 if __name__ == "__main__":

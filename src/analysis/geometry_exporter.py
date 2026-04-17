@@ -34,6 +34,18 @@ PREVIEW_VIEW_PRESETS = {
 }
 
 
+def _json_safe(value):
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, (np.floating, np.integer)):
+        return value.item()
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
 def _require_float_array(curves: dict, key: str) -> np.ndarray:
     if key not in curves:
         raise ValueError(f"Curves 缺少欄位: {key}")
@@ -234,7 +246,7 @@ def _write_preview_html(
         # vertices are already bbox-centered in _normalize_mesh; keep them in that frame
         "vertices": [{"x": point[0], "y": point[1], "z": point[2]} for point in vertices],
         "faces": [{"a": a, "b": b, "c": c} for a, b, c in faces],
-        "metrics": {k: float(v) if isinstance(v, (int, float)) else str(v) for k, v in metrics.items()},
+        "metrics": _json_safe(metrics),
     }
     default_view = dict(DEFAULT_PREVIEW_VIEW)
     preset_views = {name: dict(values) for name, values in PREVIEW_VIEW_PRESETS.items()}
@@ -352,11 +364,8 @@ def _write_preview_html(
           ctx.lineTo(tri.p2[0], tri.p2[1]);
           ctx.closePath();
           ctx.fillStyle = `rgb({{shade}}, {{Math.min(220, shade + 25)}}, 240)`;
-          ctx.strokeStyle = "rgba(28, 35, 45, 0.6)";
-          ctx.lineWidth = 0.35;
-          ctx.globalAlpha = 0.92;
+          ctx.globalAlpha = 0.95;
           ctx.fill();
-          ctx.stroke();
         }}
 
         ctx.fillStyle = "#444";
@@ -536,8 +545,8 @@ def generate_geometry_assets(
     metrics: dict,
     *,
     exports: Iterable[str] | None = None,
-    section_count: int = 64,
-    section_points: int = 40,
+    section_count: int = 84,
+    section_points: int = 56,
 ) -> dict:
     output_dir = Path(case_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
