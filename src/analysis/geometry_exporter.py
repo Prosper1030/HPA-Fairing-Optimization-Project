@@ -34,18 +34,6 @@ PREVIEW_VIEW_PRESETS = {
 }
 
 
-def _json_safe(value):
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, (np.floating, np.integer)):
-        return value.item()
-    if isinstance(value, dict):
-        return {str(key): _json_safe(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_safe(item) for item in value]
-    return value
-
-
 def _require_float_array(curves: dict, key: str) -> np.ndarray:
     if key not in curves:
         raise ValueError(f"Curves 缺少欄位: {key}")
@@ -237,9 +225,6 @@ def _write_preview_html(
     faces: list[tuple[int, int, int]],
     metrics: dict,
     path: Path,
-    *,
-    section_count: int,
-    section_points: int,
 ) -> None:
     x_extent = max(v[0] for v in vertices) - min(v[0] for v in vertices)
     y_extent = max(v[1] for v in vertices) - min(v[1] for v in vertices)
@@ -249,11 +234,7 @@ def _write_preview_html(
         # vertices are already bbox-centered in _normalize_mesh; keep them in that frame
         "vertices": [{"x": point[0], "y": point[1], "z": point[2]} for point in vertices],
         "faces": [{"a": a, "b": b, "c": c} for a, b, c in faces],
-        "mesh": {
-            "sectionCount": int(section_count),
-            "sectionPoints": int(section_points),
-        },
-        "metrics": _json_safe(metrics),
+        "metrics": {k: float(v) if isinstance(v, (int, float)) else str(v) for k, v in metrics.items()},
     }
     default_view = dict(DEFAULT_PREVIEW_VIEW)
     preset_views = {name: dict(values) for name, values in PREVIEW_VIEW_PRESETS.items()}
@@ -284,12 +265,6 @@ def _write_preview_html(
         <option value="top">頂視</option>
         <option value="front">前視</option>
       </select>
-      <label for="renderMode">顯示模式:</label>
-      <select id="renderMode">
-        <option value="surface_grid">曲面+格線</option>
-        <option value="surface">純曲面</option>
-        <option value="wire">僅格線</option>
-      </select>
       <button type="button" id="resetView">重置視角</button>
     </div>
     <div id="canvasWrap"><canvas id="preview" width="920" height="560"></canvas></div>
@@ -301,7 +276,6 @@ def _write_preview_html(
       const canvas = document.getElementById("preview");
       const ctx = canvas.getContext("2d");
       const preset = document.getElementById("viewPreset");
-      const renderModeSelect = document.getElementById("renderMode");
       const metricText = document.getElementById("metricJson");
       const resetView = document.getElementById("resetView");
       const defaultView = {json.dumps(default_view, ensure_ascii=False)};
@@ -309,9 +283,6 @@ def _write_preview_html(
 
       const verts = geometry.vertices;
       const faces = geometry.faces;
-      const meshInfo = geometry.mesh || {{ sectionCount: 0, sectionPoints: 0 }};
-      const meshSectionCount = Math.max(0, meshInfo.sectionCount || 0);
-      const meshSectionPoints = Math.max(0, meshInfo.sectionPoints || 0);
       metricText.textContent = JSON.stringify(geometry.metrics, null, 2);
 
       let yaw = defaultView.yaw;
@@ -324,7 +295,7 @@ def _write_preview_html(
       let lastX = 0.0;
       let lastY = 0.0;
       const extent = {extent:.8f};
-      const safeExtent = Math.max(extent, 1e-8);
+      const scaleBase = Math.min(canvas.width, canvas.height) / Math.max(extent, 1e-8) * 0.38;
 
       function applyRotation(point) {{
         const cx = Math.cos(yaw), sx = Math.sin(yaw);
@@ -348,120 +319,15 @@ def _write_preview_html(
         return [x3, y3, z3];
       }}
 
-      function computeProjectedRawPoints() {{
-        return verts.map((point) => {{
-          const rotated = applyRotation(point);
-          const perspective = 1.25 / (1.25 - rotated[2] / safeExtent);
-          return [
-            rotated[0] * perspective,
-            -rotated[1] * perspective,
-            rotated[2],
-          ];
-        }});
-      }}
-
-      function computeFitInfo(projectedRaw) {{
-        let minX = Infinity;
-        let maxX = -Infinity;
-        let minY = Infinity;
-        let maxY = -Infinity;
-
-        for (const point of projectedRaw) {{
-          minX = Math.min(minX, point[0]);
-          maxX = Math.max(maxX, point[0]);
-          minY = Math.min(minY, point[1]);
-          maxY = Math.max(maxY, point[1]);
-        }}
-
-        const width = Math.max(maxX - minX, 1e-8);
-        const height = Math.max(maxY - minY, 1e-8);
-        const usableWidth = canvas.width * 0.78;
-        const usableHeight = canvas.height * 0.72;
-        return {{
-          centerX: 0.5 * (minX + maxX),
-          centerY: 0.5 * (minY + maxY),
-          scale: Math.min(usableWidth / width, usableHeight / height),
-        }};
-      }}
-
-      function project(point, fitInfo) {{
+      function project(point) {{
         const rotated = applyRotation(point);
-        const perspective = 1.25 / (1.25 - rotated[2] / safeExtent);
-        const rawX = rotated[0] * perspective;
-        const rawY = -rotated[1] * perspective;
+        const perspective = 1.25 / (1.25 - rotated[2] / Math.max(extent, 1e-8));
         return [
-          canvas.width / 2 + ((rawX - fitInfo.centerX) * fitInfo.scale * zoom) + panX,
-          canvas.height / 2 + ((rawY - fitInfo.centerY) * fitInfo.scale * zoom) + panY,
+          canvas.width / 2 + (rotated[0] * scaleBase * zoom * perspective) + panX,
+          canvas.height / 2 + (-rotated[1] * scaleBase * zoom * perspective) + panY,
           rotated[2],
           perspective,
         ];
-      }}
-
-      function strokePolyline(points, color, width, closePath = false) {{
-        if (!points || points.length < 2) {{
-          return;
-        }}
-        ctx.beginPath();
-        ctx.moveTo(points[0][0], points[0][1]);
-        for (let index = 1; index < points.length; index += 1) {{
-          ctx.lineTo(points[index][0], points[index][1]);
-        }}
-        if (closePath) {{
-          ctx.closePath();
-        }}
-        ctx.strokeStyle = color;
-        ctx.lineWidth = width;
-        ctx.globalAlpha = 1.0;
-        ctx.stroke();
-      }}
-
-      function projectedVertex(projected, ringIndex, pointIndex) {{
-        const wrappedPoint = ((pointIndex % meshSectionPoints) + meshSectionPoints) % meshSectionPoints;
-        return projected[ringIndex * meshSectionPoints + wrappedPoint];
-      }}
-
-      function drawStructuredGrid(projected) {{
-        if (meshSectionCount < 2 || meshSectionPoints < 3) {{
-          return;
-        }}
-
-        const ringStride = Math.max(1, Math.floor(meshSectionCount / 12));
-        const meridianStride = Math.max(1, Math.floor(meshSectionPoints / 14));
-        const ringIndices = [];
-        const meridianIndices = [];
-
-        for (let ringIndex = 0; ringIndex < meshSectionCount; ringIndex += ringStride) {{
-          ringIndices.push(ringIndex);
-        }}
-        if (ringIndices[ringIndices.length - 1] !== meshSectionCount - 1) {{
-          ringIndices.push(meshSectionCount - 1);
-        }}
-
-        for (let pointIndex = 0; pointIndex < meshSectionPoints; pointIndex += meridianStride) {{
-          meridianIndices.push(pointIndex);
-        }}
-        for (const anchor of [0, Math.floor(meshSectionPoints / 4), Math.floor(meshSectionPoints / 2), Math.floor(3 * meshSectionPoints / 4)]) {{
-          if (!meridianIndices.includes(anchor)) {{
-            meridianIndices.push(anchor);
-          }}
-        }}
-        meridianIndices.sort((left, right) => left - right);
-
-        for (const ringIndex of ringIndices) {{
-          const ringPoints = [];
-          for (let pointIndex = 0; pointIndex < meshSectionPoints; pointIndex += 1) {{
-            ringPoints.push(projectedVertex(projected, ringIndex, pointIndex));
-          }}
-          strokePolyline(ringPoints, "rgba(90, 120, 168, 0.30)", 0.85, true);
-        }}
-
-        for (const pointIndex of meridianIndices) {{
-          const meridianPoints = [];
-          for (let ringIndex = 0; ringIndex < meshSectionCount; ringIndex += 1) {{
-            meridianPoints.push(projectedVertex(projected, ringIndex, pointIndex));
-          }}
-          strokePolyline(meridianPoints, "rgba(62, 86, 130, 0.24)", 0.95, false);
-        }}
       }}
 
       function draw() {{
@@ -469,9 +335,7 @@ def _write_preview_html(
         ctx.fillStyle = "#ffffff";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        const projectedRaw = computeProjectedRawPoints();
-        const fitInfo = computeFitInfo(projectedRaw);
-        const projected = verts.map((v) => project(v, fitInfo));
+        const projected = verts.map((v) => project(v));
         const triangles = faces.map((f, index) => {{
           const p0 = projected[f.a];
           const p1 = projected[f.b];
@@ -480,22 +344,19 @@ def _write_preview_html(
           return {{p0, p1, p2, depth, index}};
         }}).sort((left, right) => left.depth - right.depth);
 
-        if (renderModeSelect.value !== "wire") {{
-          for (const tri of triangles) {{
-            const shade = Math.max(20, Math.min(180, Math.round(180 - tri.depth * 25)));
-            ctx.beginPath();
-            ctx.moveTo(tri.p0[0], tri.p0[1]);
-            ctx.lineTo(tri.p1[0], tri.p1[1]);
-            ctx.lineTo(tri.p2[0], tri.p2[1]);
-            ctx.closePath();
-            ctx.fillStyle = `rgb(${{shade}}, ${{Math.min(220, shade + 25)}}, 240)`;
-            ctx.globalAlpha = renderModeSelect.value === "surface" ? 0.96 : 0.90;
-            ctx.fill();
-          }}
-        }}
-
-        if (renderModeSelect.value !== "surface") {{
-          drawStructuredGrid(projected);
+        for (const tri of triangles) {{
+          const shade = Math.max(20, Math.min(180, Math.round(180 - tri.depth * 25)));
+          ctx.beginPath();
+          ctx.moveTo(tri.p0[0], tri.p0[1]);
+          ctx.lineTo(tri.p1[0], tri.p1[1]);
+          ctx.lineTo(tri.p2[0], tri.p2[1]);
+          ctx.closePath();
+          ctx.fillStyle = `rgb({{shade}}, {{Math.min(220, shade + 25)}}, 240)`;
+          ctx.strokeStyle = "rgba(28, 35, 45, 0.6)";
+          ctx.lineWidth = 0.35;
+          ctx.globalAlpha = 0.92;
+          ctx.fill();
+          ctx.stroke();
         }}
 
         ctx.fillStyle = "#444";
@@ -528,22 +389,22 @@ def _write_preview_html(
       }}
 
       function drawAxesOverlay() {{
-        const axisPixels = Math.min(canvas.width, canvas.height) * 0.08;
+        const axisScale = Math.min(canvas.width, canvas.height) * 0.08;
+        const originModel = {{ x: 0.0, y: 0.0, z: 0.0 }};
+        const xModel = {{ x: axisScale / scaleBase, y: 0.0, z: 0.0 }};
+        const yModel = {{ x: 0.0, y: axisScale / scaleBase, z: 0.0 }};
+        const zModel = {{ x: 0.0, y: 0.0, z: axisScale / scaleBase }};
         const origin = [92, canvas.height - 78];
         const projectAxis = (point) => {{
           const rotated = applyRotation(point);
-          const inPlaneNorm = Math.hypot(rotated[0], rotated[1]);
-          if (inPlaneNorm <= 1e-8) {{
-            return [origin[0], origin[1]];
-          }}
           return [
-            origin[0] + (rotated[0] / inPlaneNorm) * axisPixels,
-            origin[1] - (rotated[1] / inPlaneNorm) * axisPixels,
+            origin[0] + rotated[0] * scaleBase * 0.55,
+            origin[1] - rotated[1] * scaleBase * 0.55,
           ];
         }};
-        const px = projectAxis({{ x: 1.0, y: 0.0, z: 0.0 }});
-        const py = projectAxis({{ x: 0.0, y: 1.0, z: 0.0 }});
-        const pz = projectAxis({{ x: 0.0, y: 0.0, z: 1.0 }});
+        const px = projectAxis(xModel);
+        const py = projectAxis(yModel);
+        const pz = projectAxis(zModel);
         ctx.fillStyle = "rgba(255,255,255,0.88)";
         ctx.fillRect(16, canvas.height - 116, 150, 92);
         ctx.strokeStyle = "rgba(40, 58, 78, 0.20)";
@@ -586,10 +447,6 @@ def _write_preview_html(
 
       preset.addEventListener("change", () => {{
         applyPreset(preset.value);
-      }});
-
-      renderModeSelect.addEventListener("change", () => {{
-        draw();
       }});
 
       resetView.addEventListener("click", () => {{
@@ -636,9 +493,6 @@ def _write_exports(
     output_dir: Path,
     exports: list[str],
     metrics: dict,
-    *,
-    section_count: int,
-    section_points: int,
 ) -> dict:
     produced: dict[str, str | None] = {
         "preview_html": None,
@@ -666,14 +520,7 @@ def _write_exports(
 
     if "preview" in exports:
         path = output_dir / "geometry_preview.html"
-        _write_preview_html(
-            preview_vertices,
-            faces,
-            metrics,
-            path,
-            section_count=section_count,
-            section_points=section_points,
-        )
+        _write_preview_html(preview_vertices, faces, metrics, path)
         produced["preview_html"] = str(path)
 
     if "step" in exports or "brep" in exports:
@@ -689,8 +536,8 @@ def generate_geometry_assets(
     metrics: dict,
     *,
     exports: Iterable[str] | None = None,
-    section_count: int = 84,
-    section_points: int = 56,
+    section_count: int = 64,
+    section_points: int = 40,
 ) -> dict:
     output_dir = Path(case_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -727,15 +574,7 @@ def generate_geometry_assets(
         }
         return payload
 
-    export_summary = _write_exports(
-        vertices,
-        faces,
-        output_dir,
-        requested,
-        metrics,
-        section_count=section_count,
-        section_points=section_points,
-    )
+    export_summary = _write_exports(vertices, faces, output_dir, requested, metrics)
     payload.update(export_summary)
     payload["Status"] = "ok"
     payload["MeshVertices"] = len(vertices)
