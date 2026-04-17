@@ -1,19 +1,24 @@
 """
-Prepare shortlist-level high-fidelity validation bundles.
+Prepare and execute shortlist-level SU2 validation bundles.
 
-The current implementation focuses on creating a reproducible SU2 work package
-for a small number of candidates. It does not mesh or run SU2 automatically;
-instead, it writes the geometry tables, proxy baselines, starter SU2 config,
-and shell helpers needed for the final validation stage.
+This module packages the proxy baseline, geometry tables, starter configs, and
+shell helpers needed for the final validation stage. Once a `.su2` mesh is
+available for a case, the same module can also launch SU2 and summarize the
+result into repo-friendly JSON / Markdown artifacts.
 """
 
 from __future__ import annotations
 
+import csv
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 from pathlib import Path
 import json
 import re
+import shlex
+import shutil
+import subprocess
+import time
 
 import numpy as np
 
@@ -39,6 +44,13 @@ DEFAULT_SU2_SETTINGS = {
     "objective_function": "DRAG",
 }
 
+DEFAULT_SU2_RUNTIME_SETTINGS = {
+    "conv_filename": "history",
+    "tabular_format": "CSV",
+    "screen_output": "(INNER_ITER, RMS_RES, AERO_COEFF)",
+    "history_output": "(ITER, RMS_RES, AERO_COEFF)",
+}
+
 SU2_DOC_LINKS = {
     "configuration": "https://su2code.github.io/docs_v7/Configuration-File/",
     "physical_definition": "https://su2code.github.io/docs_v7/Physical-Definition/",
@@ -49,6 +61,10 @@ SU2_DOC_LINKS = {
 
 class HighFidelityValidationNotReady(NotImplementedError):
     """Raised when a planned high-fidelity backend is not implemented yet."""
+
+
+class SU2ExecutionError(RuntimeError):
+    """Raised when a prepared SU2 case cannot be executed or parsed."""
 
 
 def _json_default(value):
@@ -153,6 +169,194 @@ def _write_geometry_table(curves: dict, output_path: Path) -> None:
     output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _read_config_entries(config_path: Path) -> list[tuple[str | None, str]]:
+    entries: list[tuple[str | None, str]] = []
+    for raw_line in config_path.read_text(encoding="utf-8").splitlines():
+        stripped = raw_line.strip()
+        if "=" in stripped and not stripped.startswith("%"):
+            key = stripped.split("=", 1)[0].strip().upper()
+            entries.append((key, raw_line))
+        else:
+            entries.append((None, raw_line))
+    return entries
+
+
+def _write_runtime_config(config_path: Path) -> Path:
+    entries = _read_config_entries(config_path)
+    overrides = {
+        "CONV_FILENAME": DEFAULT_SU2_RUNTIME_SETTINGS["conv_filename"],
+        "TABULAR_FORMAT": DEFAULT_SU2_RUNTIME_SETTINGS["tabular_format"],
+        "SCREEN_OUTPUT": DEFAULT_SU2_RUNTIME_SETTINGS["screen_output"],
+        "HISTORY_OUTPUT": DEFAULT_SU2_RUNTIME_SETTINGS["history_output"],
+    }
+
+    seen_keys: set[str] = set()
+    output_lines: list[str] = []
+    for key, raw_line in entries:
+        if key in overrides:
+            output_lines.append(f"{key}= {overrides[key]}")
+            seen_keys.add(key)
+        else:
+            output_lines.append(raw_line)
+
+    for key, value in overrides.items():
+        if key not in seen_keys:
+            output_lines.append(f"{key}= {value}")
+
+    runtime_config_path = config_path.with_name("su2_runtime.cfg")
+    runtime_config_path.write_text("\n".join(output_lines) + "\n", encoding="utf-8")
+    return runtime_config_path
+
+
+def _history_candidates(case_dir: Path) -> list[Path]:
+    stem = DEFAULT_SU2_RUNTIME_SETTINGS["conv_filename"]
+    return [
+        case_dir / f"{stem}.csv",
+        case_dir / f"{stem}.dat",
+        case_dir / stem,
+        case_dir / "history.csv",
+        case_dir / "history.dat",
+    ]
+
+
+def _parse_float(value) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip().strip('"')
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _read_history_csv(history_path: Path) -> list[dict]:
+    with open(history_path, "r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        return [dict(row) for row in reader]
+
+
+def _read_history_dat(history_path: Path) -> list[dict]:
+    lines = history_path.read_text(encoding="utf-8").splitlines()
+    data_lines = [line.strip() for line in lines if line.strip()]
+    if len(data_lines) < 2:
+        raise SU2ExecutionError(f"history 檔案內容不足: {history_path}")
+
+    header = [column.strip().strip('"') for column in data_lines[0].split(",")]
+    if len(header) == 1:
+        header = data_lines[0].replace("\t", " ").split()
+
+    rows: list[dict] = []
+    for line in data_lines[1:]:
+        values = [column.strip().strip('"') for column in line.split(",")]
+        if len(values) == 1:
+            values = line.replace("\t", " ").split()
+        if len(values) != len(header):
+            continue
+        rows.append(dict(zip(header, values)))
+    return rows
+
+
+def _load_history_rows(history_path: Path) -> list[dict]:
+    if history_path.suffix.lower() == ".csv":
+        return _read_history_csv(history_path)
+    return _read_history_dat(history_path)
+
+
+def _find_history_file(case_dir: Path) -> Path:
+    for candidate in _history_candidates(case_dir):
+        if candidate.exists():
+            return candidate
+    raise SU2ExecutionError(f"找不到 SU2 history 檔案: {case_dir}")
+
+
+def _lookup_metric(row: dict, *keys: str) -> float | None:
+    normalized = {str(key).strip().upper(): value for key, value in row.items()}
+    for key in keys:
+        if key.upper() in normalized:
+            parsed = _parse_float(normalized[key.upper()])
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def _build_su2_result_markdown(result: dict) -> str:
+    lines = [
+        "# SU2 Case Result",
+        "",
+        f"- Status: {result['Status']}",
+        f"- CaseDir: {result['CaseDir']}",
+        f"- SolverCommand: {result['SolverCommand']}",
+        f"- RuntimeSeconds: {result['RuntimeSeconds']:.3f}",
+        f"- HistoryFile: {result['HistoryFile']}",
+    ]
+
+    if result.get("Cd") is not None:
+        lines.append(f"- Cd: {result['Cd']:.6f}")
+    if result.get("Drag") is not None:
+        lines.append(f"- Drag: {result['Drag']:.6f} N")
+    if result.get("Iterations") is not None:
+        lines.append(f"- Iterations: {result['Iterations']}")
+    if result.get("ForceX") is not None:
+        lines.append(f"- ForceX: {result['ForceX']:.6f}")
+
+    lines.extend(
+        [
+            "",
+            "## Files",
+            "",
+            f"- result_json: {result['ResultFiles']['json']}",
+            f"- result_markdown: {result['ResultFiles']['markdown']}",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _build_run_summary(
+    case_results: list[dict],
+    *,
+    solver_command: str,
+    mpi_ranks: int | None,
+    dry_run: bool,
+) -> dict:
+    return {
+        "GeneratedAt": datetime.now().isoformat(),
+        "TotalCases": len(case_results),
+        "SuccessfulCases": sum(1 for item in case_results if item["Status"] in {"completed", "dry_run"}),
+        "FailedCases": sum(1 for item in case_results if item["Status"] == "error"),
+        "Cases": case_results,
+        "SolverCommand": solver_command,
+        "MpiRanks": mpi_ranks,
+        "DryRun": dry_run,
+    }
+
+
+def _build_su2_run_summary_markdown(summary: dict) -> str:
+    lines = [
+        "# SU2 Run Summary",
+        "",
+        f"- GeneratedAt: {summary['GeneratedAt']}",
+        f"- TotalCases: {summary['TotalCases']}",
+        f"- SuccessfulCases: {summary['SuccessfulCases']}",
+        f"- FailedCases: {summary['FailedCases']}",
+        "",
+        "| Case | Status | Cd | Drag (N) | History |",
+        "| --- | --- | ---: | ---: | --- |",
+    ]
+
+    for entry in summary["Cases"]:
+        cd = "n/a" if entry.get("Cd") is None else f"{entry['Cd']:.6f}"
+        drag = "n/a" if entry.get("Drag") is None else f"{entry['Drag']:.6f}"
+        lines.append(
+            f"| {entry['CaseName']} | {entry['Status']} | {cd} | {drag} | {entry.get('HistoryFile', 'n/a')} |"
+        )
+
+    return "\n".join(lines) + "\n"
+
+
 def _build_su2_config(case_name: str, gene: dict, flow_conditions: dict, su2_settings: dict) -> str:
     velocity = float(flow_conditions["velocity"])
     rho = float(flow_conditions["rho"])
@@ -198,6 +402,10 @@ def _build_su2_config(case_name: str, gene: dict, flow_conditions: dict, su2_set
         f"OBJECTIVE_FUNCTION= {su2_settings['objective_function']}\n"
         f"MARKER_MONITORING = ( {su2_settings['marker_wall']} )\n"
         f"MARKER_PLOTTING = ( {su2_settings['marker_wall']} )\n"
+        f"CONV_FILENAME= {DEFAULT_SU2_RUNTIME_SETTINGS['conv_filename']}\n"
+        f"TABULAR_FORMAT= {DEFAULT_SU2_RUNTIME_SETTINGS['tabular_format']}\n"
+        f"SCREEN_OUTPUT= {DEFAULT_SU2_RUNTIME_SETTINGS['screen_output']}\n"
+        f"HISTORY_OUTPUT= {DEFAULT_SU2_RUNTIME_SETTINGS['history_output']}\n"
         "\n"
         f"MESH_FILENAME= {su2_settings['mesh_filename']}\n"
         f"MESH_FORMAT= {su2_settings['mesh_format']}\n"
@@ -222,6 +430,7 @@ def _build_case_readme(case_name: str, case_entry: dict, su2_settings: dict) -> 
         "- `summary.json` / `summary.md`: 目前 fast proxy 的基準結果",
         "- `fairing_geometry.csv`: 外形曲線與包絡表格，方便檢查或重建幾何",
         "- `su2_case.cfg`: SU2 starter config",
+        "- `su2_runtime.cfg`: 已鎖定 history / output 設定的實跑 config",
         "- `PUT_MESH_HERE.txt`: mesh 與 marker 命名提醒",
         "",
         "## Mesh Contract",
@@ -269,8 +478,9 @@ def _build_case_readme(case_name: str, case_entry: dict, su2_settings: dict) -> 
         "",
         "1. 以這個 case 的外形重建或匯出最終 mesh，存成 `fairing_mesh.su2`。",
         "2. 確認 mesh markers 名稱與 config 一致。",
-        "3. 在此資料夾執行 `SU2_CFD su2_case.cfg`，或改用 `mpirun -n 4 SU2_CFD su2_case.cfg`。",
-        "4. 把 SU2 的 drag / force 結果回填到你的 shortlist 比較表。",
+        "3. 優先執行 `SU2_CFD su2_runtime.cfg`，或改用 `mpirun -n 4 SU2_CFD su2_runtime.cfg`。",
+        "4. 如果你還在 repo 內，也可以用 `python scripts/run_su2_shortlist.py --shortlist-dir <shortlist_dir>` 自動彙整結果。",
+        "5. 把 SU2 的 drag / force 結果回填到你的 shortlist 比較表。",
         "",
         "## SU2 References",
         "",
@@ -432,12 +642,17 @@ def _write_root_run_script(output_dir: Path, case_entries: list[dict]) -> Path:
         [
             "do",
             '  mesh_path="$case_dir/fairing_mesh.su2"',
+            '  runtime_cfg="$case_dir/su2_runtime.cfg"',
             '  if [ ! -f "$mesh_path" ]; then',
             '    echo "Skipping $case_dir (missing fairing_mesh.su2)"',
             "    continue",
             "  fi",
+            '  if [ ! -f "$runtime_cfg" ]; then',
+            '    echo "Skipping $case_dir (missing su2_runtime.cfg)"',
+            "    continue",
+            "  fi",
             '  echo "Running $case_dir"',
-            '  (cd "$case_dir" && SU2_CFD su2_case.cfg)',
+            '  (cd "$case_dir" && SU2_CFD su2_runtime.cfg)',
             "done",
             "",
         ]
@@ -447,6 +662,242 @@ def _write_root_run_script(output_dir: Path, case_entries: list[dict]) -> Path:
     script_path.write_text("\n".join(lines), encoding="utf-8")
     script_path.chmod(0o755)
     return script_path
+
+
+def _resolve_solver_command(solver_command: str) -> list[str]:
+    command = shlex.split(solver_command)
+    if not command:
+        raise SU2ExecutionError("solver_command 不可為空")
+
+    executable = command[0]
+    if Path(executable).exists():
+        return command
+    resolved = shutil.which(executable)
+    if resolved is None:
+        raise SU2ExecutionError(f"找不到 SU2 solver 指令: {executable}")
+    command[0] = resolved
+    return command
+
+
+def _preview_solver_command(solver_command: str) -> list[str]:
+    command = shlex.split(solver_command)
+    if not command:
+        raise SU2ExecutionError("solver_command 不可為空")
+    return command
+
+
+def _case_mesh_path(case_dir: Path, config_path: Path) -> Path:
+    mesh_path = case_dir / DEFAULT_SU2_SETTINGS["mesh_filename"]
+    if mesh_path.exists():
+        return mesh_path
+
+    for key, raw_line in _read_config_entries(config_path):
+        if key == "MESH_FILENAME":
+            mesh_name = raw_line.split("=", 1)[1].split("%", 1)[0].strip()
+            candidate = case_dir / mesh_name
+            if candidate.exists():
+                return candidate
+    raise SU2ExecutionError(f"找不到 mesh 檔案: {mesh_path}")
+
+
+def _result_files_for_case(case_dir: Path) -> dict:
+    return {
+        "json": str(case_dir / "su2_result.json"),
+        "markdown": str(case_dir / "su2_result.md"),
+    }
+
+
+def _write_shortlist_run_summary(root: Path, summary: dict) -> dict:
+    summary_json_path = root / "su2_run_summary.json"
+    summary_md_path = root / "su2_run_summary.md"
+    summary["SummaryFiles"] = {
+        "json": str(summary_json_path),
+        "markdown": str(summary_md_path),
+    }
+    summary_json_path.write_text(
+        json.dumps(summary, indent=2, ensure_ascii=False, default=_json_default) + "\n",
+        encoding="utf-8",
+    )
+    summary_md_path.write_text(_build_su2_run_summary_markdown(summary), encoding="utf-8")
+    return summary
+
+
+def run_prepared_su2_case(
+    case_dir: str | Path,
+    *,
+    solver_command: str = "SU2_CFD",
+    mpi_ranks: int | None = None,
+    timeout_seconds: int | None = None,
+    dry_run: bool = False,
+) -> dict:
+    case_path = Path(case_dir)
+    if not case_path.exists() or not case_path.is_dir():
+        raise SU2ExecutionError(f"找不到 case 資料夾: {case_path}")
+
+    config_path = case_path / "su2_case.cfg"
+    if not config_path.exists():
+        raise SU2ExecutionError(f"找不到 su2_case.cfg: {config_path}")
+
+    mesh_path = _case_mesh_path(case_path, config_path)
+    runtime_config_path = _write_runtime_config(config_path)
+    result_files = _result_files_for_case(case_path)
+    base_command = _preview_solver_command(solver_command) if dry_run else _resolve_solver_command(solver_command)
+
+    if mpi_ranks is not None and mpi_ranks > 1:
+        mpi_exec = shutil.which("mpirun") or shutil.which("mpiexec")
+        if mpi_exec is None:
+            raise SU2ExecutionError("指定了 mpi_ranks，但找不到 mpirun/mpiexec")
+        command = [mpi_exec, "-n", str(int(mpi_ranks)), *base_command, runtime_config_path.name]
+    else:
+        command = [*base_command, runtime_config_path.name]
+
+    started_at = time.time()
+    if dry_run:
+        runtime_seconds = time.time() - started_at
+        return {
+            "CaseName": case_path.name,
+            "CaseDir": str(case_path),
+            "Status": "dry_run",
+            "SolverCommand": " ".join(command),
+            "RuntimeConfig": str(runtime_config_path),
+            "MeshFile": str(mesh_path),
+            "RuntimeSeconds": runtime_seconds,
+            "ResultFiles": result_files,
+        }
+
+    completed = subprocess.run(
+        command,
+        cwd=case_path,
+        capture_output=True,
+        text=True,
+        timeout=timeout_seconds,
+        check=False,
+    )
+    runtime_seconds = time.time() - started_at
+    if completed.returncode != 0:
+        raise SU2ExecutionError(
+            f"SU2 執行失敗 ({case_path.name}): exit={completed.returncode}\n{completed.stderr.strip()}"
+        )
+
+    history_path = _find_history_file(case_path)
+    rows = _load_history_rows(history_path)
+    if not rows:
+        raise SU2ExecutionError(f"history 檔案沒有資料列: {history_path}")
+    last_row = rows[-1]
+    cd = _lookup_metric(last_row, "DRAG")
+    force_x = _lookup_metric(last_row, "FORCE_X")
+    iter_value = _lookup_metric(last_row, "ITER", "INNER_ITER", "OUTER_ITER")
+
+    summary_json_path = case_path / "summary.json"
+    if not summary_json_path.exists():
+        raise SU2ExecutionError(f"找不到 proxy summary.json: {summary_json_path}")
+    with open(summary_json_path, "r", encoding="utf-8") as handle:
+        proxy_summary = json.load(handle)
+    flow_conditions = proxy_summary["Analysis"]["FlowConditions"]
+    ref_area = 1.0
+    dynamic_pressure = 0.5 * float(flow_conditions["rho"]) * float(flow_conditions["velocity"]) ** 2
+    drag_force = None if cd is None else float(cd) * dynamic_pressure * ref_area
+
+    result = {
+        "CaseName": case_path.name,
+        "CaseDir": str(case_path),
+        "Status": "completed",
+        "SolverCommand": " ".join(command),
+        "RuntimeConfig": str(runtime_config_path),
+        "MeshFile": str(mesh_path),
+        "HistoryFile": str(history_path),
+        "RuntimeSeconds": runtime_seconds,
+        "Iterations": None if iter_value is None else int(iter_value),
+        "Cd": cd,
+        "Drag": drag_force,
+        "ForceX": force_x,
+        "ProxyBaseline": {
+            "Cd": proxy_summary["Analysis"].get("Cd"),
+            "Drag": proxy_summary["Analysis"].get("Drag"),
+        },
+        "ResultFiles": result_files,
+        "Stdout": completed.stdout,
+        "Stderr": completed.stderr,
+    }
+
+    Path(result_files["json"]).write_text(
+        json.dumps(result, indent=2, ensure_ascii=False, default=_json_default) + "\n",
+        encoding="utf-8",
+    )
+    Path(result_files["markdown"]).write_text(_build_su2_result_markdown(result), encoding="utf-8")
+    return result
+
+
+def _collect_case_dirs(shortlist_dir: Path, selected_cases: Iterable[str] | None = None) -> list[Path]:
+    wanted = {name for name in (selected_cases or [])}
+    case_dirs = []
+    for entry in sorted(shortlist_dir.iterdir()):
+        if not entry.is_dir():
+            continue
+        if not (entry / "su2_case.cfg").exists():
+            continue
+        if wanted and entry.name not in wanted:
+            continue
+        case_dirs.append(entry)
+    if not case_dirs:
+        raise SU2ExecutionError(f"shortlist 內沒有可執行 case: {shortlist_dir}")
+    return case_dirs
+
+
+def run_shortlist_su2_cases(
+    shortlist_dir: str | Path,
+    *,
+    solver_command: str = "SU2_CFD",
+    mpi_ranks: int | None = None,
+    timeout_seconds: int | None = None,
+    selected_cases: Iterable[str] | None = None,
+    continue_on_error: bool = False,
+    dry_run: bool = False,
+) -> dict:
+    root = Path(shortlist_dir)
+    if not root.exists() or not root.is_dir():
+        raise SU2ExecutionError(f"找不到 shortlist 目錄: {root}")
+
+    case_dirs = _collect_case_dirs(root, selected_cases)
+    case_results: list[dict] = []
+    failed_cases = 0
+
+    for case_dir in case_dirs:
+        try:
+            result = run_prepared_su2_case(
+                case_dir,
+                solver_command=solver_command,
+                mpi_ranks=mpi_ranks,
+                timeout_seconds=timeout_seconds,
+                dry_run=dry_run,
+            )
+        except Exception as exc:
+            failed_cases += 1
+            result = {
+                "CaseName": case_dir.name,
+                "CaseDir": str(case_dir),
+                "Status": "error",
+                "Error": str(exc),
+            }
+            if not continue_on_error:
+                case_results.append(result)
+                summary = _build_run_summary(
+                    case_results,
+                    solver_command=solver_command,
+                    mpi_ranks=mpi_ranks,
+                    dry_run=dry_run,
+                )
+                _write_shortlist_run_summary(root, summary)
+                raise SU2ExecutionError(str(exc)) from exc
+        case_results.append(result)
+
+    summary = _build_run_summary(
+        case_results,
+        solver_command=solver_command,
+        mpi_ranks=mpi_ranks,
+        dry_run=dry_run,
+    )
+    return _write_shortlist_run_summary(root, summary)
 
 
 def _candidate_to_mapping(candidate) -> Mapping:
@@ -509,17 +960,19 @@ def prepare_shortlist_validation_package(
             gene_metadata=gene_metadata,
         )
         _write_geometry_table(analysis["Curves"], case_dir / "fairing_geometry.csv")
-        (case_dir / "su2_case.cfg").write_text(
+        su2_config_path = case_dir / "su2_case.cfg"
+        su2_config_path.write_text(
             _build_su2_config(case_name, gene, normalized_flow, resolved_settings),
             encoding="utf-8",
         )
+        runtime_config_path = _write_runtime_config(su2_config_path)
         (case_dir / "PUT_MESH_HERE.txt").write_text(
             "\n".join(
                 [
                     "Place your final SU2 mesh here as `fairing_mesh.su2`.",
                     f"Required wall marker: {resolved_settings['marker_wall']}",
                     f"Required far-field marker: {resolved_settings['marker_far']}",
-                    "Then run `SU2_CFD su2_case.cfg` inside this folder.",
+                    "Then run `SU2_CFD su2_runtime.cfg` inside this folder.",
                     "",
                 ]
             ),
@@ -542,7 +995,8 @@ def prepare_shortlist_validation_package(
                 "summary_json": report_files["summary_json"],
                 "summary_md": report_files["summary_md"],
                 "geometry_csv": str(case_dir / "fairing_geometry.csv"),
-                "su2_config": str(case_dir / "su2_case.cfg"),
+                "su2_config": str(su2_config_path),
+                "su2_runtime_config": str(runtime_config_path),
                 "mesh_placeholder": str(case_dir / "PUT_MESH_HERE.txt"),
             },
         }

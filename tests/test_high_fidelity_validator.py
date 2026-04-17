@@ -12,7 +12,12 @@ SCRIPTS_ROOT = os.path.join(PROJECT_ROOT, "scripts")
 
 sys.path.insert(0, SRC_ROOT)
 
-from analysis import get_example_gene, prepare_shortlist_validation_package
+from analysis import (
+    get_example_gene,
+    prepare_shortlist_validation_package,
+    run_prepared_su2_case,
+    run_shortlist_su2_cases,
+)
 
 
 class TestHighFidelityValidator(unittest.TestCase):
@@ -58,6 +63,7 @@ class TestHighFidelityValidator(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(case_dir, "summary.md")))
             self.assertTrue(os.path.exists(os.path.join(case_dir, "fairing_geometry.csv")))
             self.assertTrue(os.path.exists(os.path.join(case_dir, "su2_case.cfg")))
+            self.assertTrue(os.path.exists(os.path.join(case_dir, "su2_runtime.cfg")))
             self.assertTrue(os.path.exists(os.path.join(case_dir, "README.md")))
             self.assertTrue(os.path.exists(os.path.join(case_dir, "PUT_MESH_HERE.txt")))
 
@@ -125,6 +131,132 @@ class TestHighFidelityValidator(unittest.TestCase):
 
             self.assertEqual(payload["CaseCount"], 1)
             self.assertEqual(payload["Cases"][0]["CaseName"], "gene_a")
+
+    def test_run_prepared_su2_case_parses_history_output(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest = prepare_shortlist_validation_package(
+                [{"name": "alpha", "gene": self.example_gene}],
+                output_dir=temp_dir,
+            )
+            case_dir = manifest["Cases"][0]["CaseDir"]
+            mesh_path = os.path.join(case_dir, "fairing_mesh.su2")
+            with open(mesh_path, "w", encoding="utf-8") as handle:
+                handle.write("NDIME= 3\nNELEM= 0\nNPOIN= 0\nNMARK= 0\n")
+
+            solver_path = os.path.join(temp_dir, "fake_su2.sh")
+            with open(solver_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "#!/bin/sh\n"
+                    "cat > history.csv <<'EOF'\n"
+                    "\"ITER\",\"DRAG\",\"FORCE_X\"\n"
+                    "1,0.031000,-0.031000\n"
+                    "EOF\n"
+                )
+            os.chmod(solver_path, 0o755)
+
+            result = run_prepared_su2_case(case_dir, solver_command=solver_path)
+
+            self.assertEqual(result["Status"], "completed")
+            self.assertAlmostEqual(result["Cd"], 0.031, places=6)
+            self.assertAlmostEqual(result["Drag"], 0.802221875, places=6)
+            self.assertTrue(os.path.exists(os.path.join(case_dir, "su2_result.json")))
+            self.assertTrue(os.path.exists(os.path.join(case_dir, "su2_result.md")))
+
+    def test_run_prepared_su2_case_dry_run_does_not_require_installed_solver(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest = prepare_shortlist_validation_package(
+                [{"name": "alpha", "gene": self.example_gene}],
+                output_dir=temp_dir,
+            )
+            case_dir = manifest["Cases"][0]["CaseDir"]
+            with open(os.path.join(case_dir, "fairing_mesh.su2"), "w", encoding="utf-8") as handle:
+                handle.write("NDIME= 3\nNELEM= 0\nNPOIN= 0\nNMARK= 0\n")
+
+            result = run_prepared_su2_case(case_dir, solver_command="SU2_CFD", dry_run=True)
+
+            self.assertEqual(result["Status"], "dry_run")
+            self.assertIn("SU2_CFD", result["SolverCommand"])
+            self.assertTrue(result["RuntimeConfig"].endswith("su2_runtime.cfg"))
+
+    def test_run_shortlist_su2_cases_writes_root_summary(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest = prepare_shortlist_validation_package(
+                [{"name": "alpha", "gene": self.example_gene}],
+                output_dir=temp_dir,
+            )
+            case_dir = manifest["Cases"][0]["CaseDir"]
+            mesh_path = os.path.join(case_dir, "fairing_mesh.su2")
+            with open(mesh_path, "w", encoding="utf-8") as handle:
+                handle.write("NDIME= 3\nNELEM= 0\nNPOIN= 0\nNMARK= 0\n")
+
+            solver_path = os.path.join(temp_dir, "fake_su2.sh")
+            with open(solver_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "#!/bin/sh\n"
+                    "cat > history.csv <<'EOF'\n"
+                    "\"ITER\",\"DRAG\"\n"
+                    "1,0.029000\n"
+                    "EOF\n"
+                )
+            os.chmod(solver_path, 0o755)
+
+            summary = run_shortlist_su2_cases(temp_dir, solver_command=solver_path)
+
+            self.assertEqual(summary["SuccessfulCases"], 1)
+            self.assertTrue(os.path.exists(summary["SummaryFiles"]["json"]))
+            self.assertTrue(os.path.exists(summary["SummaryFiles"]["markdown"]))
+
+    def test_run_shortlist_su2_cases_writes_summary_on_failure(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            prepare_shortlist_validation_package(
+                [{"name": "alpha", "gene": self.example_gene}],
+                output_dir=temp_dir,
+            )
+
+            with self.assertRaises(RuntimeError):
+                run_shortlist_su2_cases(temp_dir, solver_command="missing_su2_binary")
+
+            self.assertTrue(os.path.exists(os.path.join(temp_dir, "su2_run_summary.json")))
+            self.assertTrue(os.path.exists(os.path.join(temp_dir, "su2_run_summary.md")))
+
+    def test_cli_can_run_shortlist_with_fake_solver(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest = prepare_shortlist_validation_package(
+                [{"name": "alpha", "gene": self.example_gene}],
+                output_dir=temp_dir,
+            )
+            case_dir = manifest["Cases"][0]["CaseDir"]
+            with open(os.path.join(case_dir, "fairing_mesh.su2"), "w", encoding="utf-8") as handle:
+                handle.write("NDIME= 3\nNELEM= 0\nNPOIN= 0\nNMARK= 0\n")
+
+            solver_path = os.path.join(temp_dir, "fake_su2.sh")
+            with open(solver_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "#!/bin/sh\n"
+                    "cat > history.csv <<'EOF'\n"
+                    "\"ITER\",\"DRAG\"\n"
+                    "1,0.028500\n"
+                    "EOF\n"
+                )
+            os.chmod(solver_path, 0o755)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    os.path.join(SCRIPTS_ROOT, "run_su2_shortlist.py"),
+                    "--shortlist-dir",
+                    temp_dir,
+                    "--solver-cmd",
+                    solver_path,
+                ],
+                capture_output=True,
+                text=True,
+                cwd=PROJECT_ROOT,
+            )
+
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+            self.assertIn("SU2 shortlist 執行完成", proc.stdout)
+            self.assertTrue(os.path.exists(os.path.join(temp_dir, "su2_run_summary.json")))
 
 
 if __name__ == "__main__":
