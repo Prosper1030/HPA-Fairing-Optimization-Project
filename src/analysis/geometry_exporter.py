@@ -16,6 +16,24 @@ from typing import Iterable
 import numpy as np
 
 
+DEFAULT_PREVIEW_VIEW = {
+    "yaw": -0.4,
+    "pitch": 0.55,
+    "roll": 0.0,
+    "zoom": 0.82,
+}
+
+PREVIEW_VIEW_PRESETS = {
+    "isometric": dict(DEFAULT_PREVIEW_VIEW),
+    # Side view should show x horizontally and z vertically.
+    "side": {"yaw": -(math.pi / 2.0), "pitch": 0.0, "roll": 0.0, "zoom": 0.82},
+    # Top view should show x horizontally and y vertically.
+    "top": {"yaw": 0.0, "pitch": 0.0, "roll": 0.0, "zoom": 0.82},
+    # Front view should show y horizontally and z vertically.
+    "front": {"yaw": -(math.pi / 2.0), "pitch": -(math.pi / 2.0), "roll": 0.0, "zoom": 0.82},
+}
+
+
 def _require_float_array(curves: dict, key: str) -> np.ndarray:
     if key not in curves:
         raise ValueError(f"Curves 缺少欄位: {key}")
@@ -196,6 +214,8 @@ def _write_preview_html(
         "faces": [{"a": a, "b": b, "c": c} for a, b, c in faces],
         "metrics": {k: float(v) if isinstance(v, (int, float)) else str(v) for k, v in metrics.items()},
     }
+    default_view = dict(DEFAULT_PREVIEW_VIEW)
+    preset_views = {name: dict(values) for name, values in PREVIEW_VIEW_PRESETS.items()}
     html = f"""<!doctype html>
 <html>
   <head>
@@ -236,15 +256,17 @@ def _write_preview_html(
       const preset = document.getElementById("viewPreset");
       const metricText = document.getElementById("metricJson");
       const resetView = document.getElementById("resetView");
+      const defaultView = {json.dumps(default_view, ensure_ascii=False)};
+      const presetViews = {json.dumps(preset_views, ensure_ascii=False)};
 
       const verts = geometry.vertices;
       const faces = geometry.faces;
       metricText.textContent = JSON.stringify(geometry.metrics, null, 2);
 
-      let yaw = -0.4;
-      let pitch = 0.55;
-      let roll = 0.0;
-      let zoom = 0.82;
+      let yaw = defaultView.yaw;
+      let pitch = defaultView.pitch;
+      let roll = defaultView.roll;
+      let zoom = defaultView.zoom;
       let panX = 0.0;
       let panY = 0.0;
       let dragging = false;
@@ -319,6 +341,17 @@ def _write_preview_html(
         ctx.fillText("Drag / Cd / Swet", 8, 18);
       }}
 
+      function applyPreset(choice) {{
+        const view = presetViews[choice] || defaultView;
+        yaw = view.yaw;
+        pitch = view.pitch;
+        roll = view.roll;
+        zoom = view.zoom;
+        panX = 0.0;
+        panY = 0.0;
+        draw();
+      }}
+
       canvas.addEventListener("mousedown", (event) => {{
         dragging = true;
         lastX = event.clientX;
@@ -348,28 +381,12 @@ def _write_preview_html(
       }}, {{ passive: false }});
 
       preset.addEventListener("change", () => {{
-        const choice = preset.value;
-        if (choice === "side") {{
-          yaw = 1.3; pitch = 0.0; roll = 0.0;
-        }} else if (choice === "top") {{
-          yaw = 0.0; pitch = -1.25; roll = 0.0;
-        }} else if (choice === "front") {{
-          yaw = 0.0; pitch = 0.0; roll = 0.0;
-        }} else {{
-          yaw = -0.4; pitch = 0.55; roll = 0.0;
-        }}
-        draw();
+        applyPreset(preset.value);
       }});
 
       resetView.addEventListener("click", () => {{
-        zoom = 0.82;
-        panX = 0.0;
-        panY = 0.0;
-        yaw = -0.4;
-        pitch = 0.55;
-        roll = 0.0;
         preset.value = "isometric";
-        draw();
+        applyPreset("isometric");
       }});
 
       const updateSize = () => {{

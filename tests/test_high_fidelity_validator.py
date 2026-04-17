@@ -69,6 +69,11 @@ class TestHighFidelityValidator(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(case_dir, "geometry_preview.html")))
             self.assertTrue(os.path.exists(os.path.join(case_dir, "fairing_surface.obj")))
             self.assertTrue(os.path.exists(os.path.join(case_dir, "fairing_surface.stl")))
+            with open(os.path.join(case_dir, "geometry_preview.html"), "r", encoding="utf-8") as handle:
+                preview_html = handle.read()
+            self.assertIn('"side": {"yaw": -1.5707963267948966, "pitch": 0.0, "roll": 0.0, "zoom": 0.82}', preview_html)
+            self.assertIn('"top": {"yaw": 0.0, "pitch": 0.0, "roll": 0.0, "zoom": 0.82}', preview_html)
+            self.assertIn('"front": {"yaw": -1.5707963267948966, "pitch": -1.5707963267948966, "roll": 0.0, "zoom": 0.82}', preview_html)
 
             with open(os.path.join(case_dir, "su2_case.cfg"), "r", encoding="utf-8") as handle:
                 config_text = handle.read()
