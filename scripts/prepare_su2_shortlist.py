@@ -120,6 +120,21 @@ def _load_batch_summary_candidates(batch_summary_path: str | Path, top: int | No
     return candidates
 
 
+def _normalize_geometry_exports(raw_exports: list[str]) -> list[str] | None:
+    if not raw_exports:
+        return None
+    exports: list[str] = []
+    for item in raw_exports:
+        token = item.strip().lower()
+        if not token:
+            continue
+        if token == "html":
+            token = "preview"
+        if token not in exports:
+            exports.append(token)
+    return exports or None
+
+
 def _collect_candidates(args) -> list[dict]:
     candidates: list[dict] = []
 
@@ -156,6 +171,24 @@ def main() -> int:
         default="manual_3d",
         help="mesh 準備模式：manual_3d 只出工作包；axisymmetric_2d / gmsh_3d 會自動產生可跑的 benchmark mesh",
     )
+    parser.add_argument(
+        "--geometry-export",
+        action="append",
+        default=[],
+        help="匯出格式（可重複）。可用：preview、stl、obj、step、brep、html(等同 preview)",
+    )
+    parser.add_argument(
+        "--geometry-section-count",
+        type=int,
+        default=64,
+        help="geometry preview / mesh 的軸向截面數量（預設 64）",
+    )
+    parser.add_argument(
+        "--geometry-section-points",
+        type=int,
+        default=40,
+        help="每個截面輪廓的點數（預設 40）",
+    )
     parser.add_argument("--fill-missing-from-example", action="store_true", help="若 gene 缺欄位，使用範例 gene 預設值補齊")
     args = parser.parse_args()
 
@@ -176,6 +209,9 @@ def main() -> int:
             preset=preset,
             fill_missing_from_example=args.fill_missing_from_example,
             mesh_mode=args.mesh_mode,
+            geometry_exports=_normalize_geometry_exports(args.geometry_export),
+            geometry_section_count=args.geometry_section_count,
+            geometry_section_points=args.geometry_section_points,
         )
     except AnalysisInputError as exc:
         print(f"錯誤: {exc}", file=sys.stderr)

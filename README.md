@@ -325,12 +325,18 @@ python scripts/run_su2_mesh_study.py \
 - `su2_case.cfg`
 - `su2_runtime.cfg`
 - `PUT_MESH_HERE.txt`
+- `geometry_preview.html`
+- `fairing_surface.stl`
+- `fairing_surface.obj`
 - `README.md`
 
 如果你使用 `--mesh-mode axisymmetric_2d`，每個 case 還會多出：
 
 - `fairing_mesh.su2`
 - `mesh_metadata.json`
+
+如果你有指定 `--geometry-export step` 或 `--geometry-export brep`，且當前尚未啟用 STEP/BREP 匯出器，對應輸出會記錄警告在
+`validation_manifest.json` 與每個 case 的 `README.md`。
 
 根目錄另外會產生：
 

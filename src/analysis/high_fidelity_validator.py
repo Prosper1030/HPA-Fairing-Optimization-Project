@@ -30,6 +30,7 @@ from analysis.fairing_analysis import (
     normalize_gene,
     write_analysis_report_bundle,
 )
+from analysis.geometry_exporter import generate_geometry_assets
 from analysis.su2_axisymmetric_mesh import generate_axisymmetric_mesh
 from analysis.su2_gmsh_3d_mesh import generate_gmsh_3d_mesh
 
@@ -547,6 +548,17 @@ def _build_case_readme(case_name: str, case_entry: dict, su2_settings: dict) -> 
         "- `PUT_MESH_HERE.txt`: mesh 與 marker 命名提醒",
         "",
     ]
+    prepared_files = case_entry.get("PreparedFiles", {})
+    geometry_entries = [
+        ("geometry_preview_html", "geometry_preview.html", "單檔互動預覽（拖拽旋轉 / 滾輪縮放）"),
+        ("geometry_stl", "fairing_surface.stl", "幾何 STL（mesh 交換格式）"),
+        ("geometry_obj", "fairing_surface.obj", "幾何 OBJ（mesh 交換格式）"),
+        ("geometry_step", "fairing_surface.step", "STEP（目前未實作）"),
+        ("geometry_brep", "fairing_surface.brep", "BREP（目前未實作）"),
+    ]
+    for key, filename, desc in geometry_entries:
+        if prepared_files.get(key):
+            included_files.insert(-1, f"- `{filename}`: {desc}")
     if case_entry.get("MeshMode") in {"axisymmetric_2d", "gmsh_3d"}:
         included_files.insert(-2, "- `mesh_metadata.json`: 自動生 mesh 時的邊界與解析度摘要")
     if case_entry.get("MeshMode") == "gmsh_3d":
@@ -615,6 +627,17 @@ def _build_case_readme(case_name: str, case_entry: dict, su2_settings: dict) -> 
         f"- Example incompressible tutorial: {SU2_DOC_LINKS['incompressible_tutorial']}",
         ]
     )
+    geometry_warnings = case_entry.get("GeometryExportWarnings", [])
+    if geometry_warnings:
+        lines.extend(
+            [
+                "",
+                "## Geometry Export Warnings",
+                "",
+            ]
+        )
+        for warning in geometry_warnings:
+            lines.append(f"- {warning}")
     return "\n".join(lines) + "\n"
 
 
@@ -644,6 +667,7 @@ def _build_manifest_markdown(manifest: dict) -> str:
                 f"- ReynoldsNumber(L): {entry['ReynoldsNumber']:.6e}",
                 f"- MeshMode: {entry.get('MeshMode', 'manual_3d')}",
                 f"- FilledFields: {', '.join(entry['FilledFields']) if entry['FilledFields'] else 'none'}",
+                f"- GeometryAssets: {'已產生' if entry.get('GeometryAssets') else '未產生'}",
                 "",
             ]
         )
@@ -1278,6 +1302,9 @@ def prepare_shortlist_validation_package(
     mesh_mode: str = "manual_3d",
     mesh_options: Mapping | None = None,
     report_config: Mapping | None = None,
+    geometry_exports: Iterable[str] | None = None,
+    geometry_section_count: int = 64,
+    geometry_section_points: int = 40,
 ) -> dict:
     if backend != "su2":
         raise ValueError(f"Unsupported high-fidelity backend: {backend}")
@@ -1363,6 +1390,24 @@ def prepare_shortlist_validation_package(
             ),
             encoding="utf-8",
         )
+        geometry_assets = generate_geometry_assets(
+            case_dir=case_dir,
+            case_name=case_name,
+            curves=analysis["Curves"],
+            metrics={
+                "CaseName": case_name,
+                "L": float(gene["L"]),
+                "Drag": float(analysis["Drag"]),
+                "Cd": float(analysis["Cd"]),
+                "Swet": float(analysis["Swet"]),
+                "LaminarFraction": float(analysis["LaminarFraction"]),
+                "ReynoldsNumber": float(_compute_reynolds_number(gene, normalized_flow)),
+                "CurveSections": len(analysis["Curves"]["x"]),
+            },
+            exports=geometry_exports,
+            section_count=geometry_section_count,
+            section_points=geometry_section_points,
+        )
 
         case_entry = {
             "CaseName": case_name,
@@ -1387,7 +1432,14 @@ def prepare_shortlist_validation_package(
                 "mesh_metadata_json": str(mesh_metadata_path) if mesh_mode in {"axisymmetric_2d", "gmsh_3d"} else None,
                 "mesh_msh": str(case_dir / "fairing_mesh.msh") if mesh_mode == "gmsh_3d" else None,
                 "mesh_placeholder": str(case_dir / "PUT_MESH_HERE.txt"),
+                "geometry_preview_html": geometry_assets.get("Produced", {}).get("preview_html"),
+                "geometry_obj": geometry_assets.get("Produced", {}).get("obj"),
+                "geometry_stl": geometry_assets.get("Produced", {}).get("stl"),
+                "geometry_step": geometry_assets.get("Produced", {}).get("step"),
+                "geometry_brep": geometry_assets.get("Produced", {}).get("brep"),
             },
+            "GeometryAssets": geometry_assets,
+            "GeometryExportWarnings": geometry_assets.get("Warnings", []),
         }
         if mesh_metadata is not None:
             case_entry["MeshStats"] = mesh_metadata
@@ -1467,6 +1519,9 @@ def validate_shortlist(
     mesh_mode: str = "manual_3d",
     mesh_options: Mapping | None = None,
     report_config: Mapping | None = None,
+    geometry_exports: Iterable[str] | None = None,
+    geometry_section_count: int = 64,
+    geometry_section_points: int = 40,
 ) -> dict:
     return prepare_shortlist_validation_package(
         candidates,
@@ -1479,4 +1534,7 @@ def validate_shortlist(
         mesh_mode=mesh_mode,
         mesh_options=mesh_options,
         report_config=report_config,
+        geometry_exports=geometry_exports,
+        geometry_section_count=geometry_section_count,
+        geometry_section_points=geometry_section_points,
     )
