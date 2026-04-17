@@ -182,12 +182,15 @@ def _write_preview_html(
     metrics: dict,
     path: Path,
 ) -> None:
-    bbox_center = [sum(v[0] for v in vertices) / len(vertices), sum(v[1] for v in vertices) / len(vertices), sum(v[2] for v in vertices) / len(vertices)]
-    extent = max(
-        max(max(v[0] for v in vertices) - min(v[0] for v in vertices),
-        max(v[1] for v in vertices) - min(v[1] for v in vertices),
-        max(v[2] for v in vertices) - min(v[2] for v in vertices),
-    )
+    bbox_center = [
+        sum(v[0] for v in vertices) / len(vertices),
+        sum(v[1] for v in vertices) / len(vertices),
+        sum(v[2] for v in vertices) / len(vertices),
+    ]
+    x_extent = max(v[0] for v in vertices) - min(v[0] for v in vertices)
+    y_extent = max(v[1] for v in vertices) - min(v[1] for v in vertices)
+    z_extent = max(v[2] for v in vertices) - min(v[2] for v in vertices)
+    extent = max(x_extent, y_extent, z_extent)
     payload = {
         "vertices": [{"x": point[0] - bbox_center[0], "y": point[1] - bbox_center[1], "z": point[2] - bbox_center[2]} for point in vertices],
         "faces": [{"a": a, "b": b, "c": c} for a, b, c in faces],

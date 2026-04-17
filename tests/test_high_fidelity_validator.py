@@ -66,6 +66,9 @@ class TestHighFidelityValidator(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(case_dir, "su2_runtime.cfg")))
             self.assertTrue(os.path.exists(os.path.join(case_dir, "README.md")))
             self.assertTrue(os.path.exists(os.path.join(case_dir, "PUT_MESH_HERE.txt")))
+            self.assertTrue(os.path.exists(os.path.join(case_dir, "geometry_preview.html")))
+            self.assertTrue(os.path.exists(os.path.join(case_dir, "fairing_surface.obj")))
+            self.assertTrue(os.path.exists(os.path.join(case_dir, "fairing_surface.stl")))
 
             with open(os.path.join(case_dir, "su2_case.cfg"), "r", encoding="utf-8") as handle:
                 config_text = handle.read()
@@ -134,6 +137,7 @@ class TestHighFidelityValidator(unittest.TestCase):
 
             self.assertEqual(payload["CaseCount"], 1)
             self.assertEqual(payload["Cases"][0]["CaseName"], "gene_a")
+            self.assertTrue(os.path.exists(os.path.join(payload["Cases"][0]["CaseDir"], "geometry_preview.html")))
 
     def test_run_prepared_su2_case_parses_history_output(self):
         with tempfile.TemporaryDirectory() as temp_dir:
