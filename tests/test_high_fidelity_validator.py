@@ -82,6 +82,8 @@ class TestHighFidelityValidator(unittest.TestCase):
             self.assertIn('applyPreset(preset.value || "isometric")', preview_html)
             self.assertNotIn('ctx.strokeStyle = "rgba(28, 35, 45, 0.6)"', preview_html)
             self.assertIn('ctx.fillStyle = `rgb(${shade}, ${Math.min(220, shade + 25)}, 240)`;', preview_html)
+            self.assertIn('const usableWidth = canvas.width * 0.78;', preview_html)
+            self.assertIn('const projectedRaw = computeProjectedRawPoints();', preview_html)
             payload_match = re.search(r"const geometry = (\{.*?\});", preview_html, re.DOTALL)
             self.assertIsNotNone(payload_match)
             geometry_payload = json.loads(payload_match.group(1))

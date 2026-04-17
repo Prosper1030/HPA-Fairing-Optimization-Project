@@ -307,7 +307,7 @@ def _write_preview_html(
       let lastX = 0.0;
       let lastY = 0.0;
       const extent = {extent:.8f};
-      const scaleBase = Math.min(canvas.width, canvas.height) / Math.max(extent, 1e-8) * 0.38;
+      const safeExtent = Math.max(extent, 1e-8);
 
       function applyRotation(point) {{
         const cx = Math.cos(yaw), sx = Math.sin(yaw);
@@ -331,12 +331,50 @@ def _write_preview_html(
         return [x3, y3, z3];
       }}
 
-      function project(point) {{
+      function computeProjectedRawPoints() {{
+        return verts.map((point) => {{
+          const rotated = applyRotation(point);
+          const perspective = 1.25 / (1.25 - rotated[2] / safeExtent);
+          return [
+            rotated[0] * perspective,
+            -rotated[1] * perspective,
+            rotated[2],
+          ];
+        }});
+      }}
+
+      function computeFitInfo(projectedRaw) {{
+        let minX = Infinity;
+        let maxX = -Infinity;
+        let minY = Infinity;
+        let maxY = -Infinity;
+
+        for (const point of projectedRaw) {{
+          minX = Math.min(minX, point[0]);
+          maxX = Math.max(maxX, point[0]);
+          minY = Math.min(minY, point[1]);
+          maxY = Math.max(maxY, point[1]);
+        }}
+
+        const width = Math.max(maxX - minX, 1e-8);
+        const height = Math.max(maxY - minY, 1e-8);
+        const usableWidth = canvas.width * 0.78;
+        const usableHeight = canvas.height * 0.72;
+        return {{
+          centerX: 0.5 * (minX + maxX),
+          centerY: 0.5 * (minY + maxY),
+          scale: Math.min(usableWidth / width, usableHeight / height),
+        }};
+      }}
+
+      function project(point, fitInfo) {{
         const rotated = applyRotation(point);
-        const perspective = 1.25 / (1.25 - rotated[2] / Math.max(extent, 1e-8));
+        const perspective = 1.25 / (1.25 - rotated[2] / safeExtent);
+        const rawX = rotated[0] * perspective;
+        const rawY = -rotated[1] * perspective;
         return [
-          canvas.width / 2 + (rotated[0] * scaleBase * zoom * perspective) + panX,
-          canvas.height / 2 + (-rotated[1] * scaleBase * zoom * perspective) + panY,
+          canvas.width / 2 + ((rawX - fitInfo.centerX) * fitInfo.scale * zoom) + panX,
+          canvas.height / 2 + ((rawY - fitInfo.centerY) * fitInfo.scale * zoom) + panY,
           rotated[2],
           perspective,
         ];
@@ -347,7 +385,9 @@ def _write_preview_html(
         ctx.fillStyle = "#ffffff";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        const projected = verts.map((v) => project(v));
+        const projectedRaw = computeProjectedRawPoints();
+        const fitInfo = computeFitInfo(projectedRaw);
+        const projected = verts.map((v) => project(v, fitInfo));
         const triangles = faces.map((f, index) => {{
           const p0 = projected[f.a];
           const p1 = projected[f.b];
