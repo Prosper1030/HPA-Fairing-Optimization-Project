@@ -174,22 +174,23 @@ class TestHighFidelityValidator(unittest.TestCase):
             with open(mesh_path, "w", encoding="utf-8") as handle:
                 handle.write("NDIME= 3\nNELEM= 0\nNPOIN= 0\nNMARK= 0\n")
 
+            history_path = os.path.join(case_dir, "history.csv")
+            with open(history_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "\"Time_Iter\",\"Outer_Iter\",\"Inner_Iter\",     \"rms[P]\"     ,     \"rms[U]\"     ,     \"rms[V]\"     ,    \"RefForce\"    ,       \"CD\"       ,       \"CL\"       ,       \"CSF\"      ,       \"CMx\"      ,       \"CMy\"      ,       \"CMz\"      ,       \"CFx\"      ,       \"CFy\"      ,       \"CFz\"      ,      \"CEff\"      \n"
+                    "0,0,49,-4.024284,-1.764546,-2.547058,25.878125,0.172186,0.753189,0,0,0,0.402861,0.172186,0.753189,0,4.374266\n"
+                )
+
             solver_path = os.path.join(temp_dir, "fake_su2_uppercase.sh")
             with open(solver_path, "w", encoding="utf-8") as handle:
-                handle.write(
-                    "#!/bin/sh\n"
-                    "cat > history.csv <<'EOF'\n"
-                    "\"Time_Iter\",\"Outer_Iter\",\"Inner_Iter\",\"CD\",\"CFx\"\n"
-                    "0,0,49,0.172186,0.402861\n"
-                    "EOF\n"
-                )
+                handle.write("#!/bin/sh\nexit 0\n")
             os.chmod(solver_path, 0o755)
 
             result = run_prepared_su2_case(case_dir, solver_command=solver_path)
 
             self.assertEqual(result["Status"], "completed")
             self.assertAlmostEqual(result["Cd"], 0.172186, places=6)
-            self.assertAlmostEqual(result["ForceX"], 0.402861, places=6)
+            self.assertAlmostEqual(result["ForceX"], 0.172186, places=6)
             self.assertAlmostEqual(result["Drag"], 4.45585083125, places=6)
 
     def test_run_prepared_su2_case_accepts_solver_path_with_spaces(self):

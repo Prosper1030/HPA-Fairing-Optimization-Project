@@ -276,11 +276,18 @@ def _find_history_file(case_dir: Path) -> Path:
     raise SU2ExecutionError(f"找不到 SU2 history 檔案: {case_dir}")
 
 
+def _normalize_history_key(key) -> str:
+    normalized = str(key).strip().strip('"').strip("'").strip()
+    normalized = normalized.replace("-", "_").replace(" ", "")
+    return normalized.upper()
+
+
 def _lookup_metric(row: dict, *keys: str) -> float | None:
-    normalized = {str(key).strip().upper(): value for key, value in row.items()}
+    normalized = {_normalize_history_key(key): value for key, value in row.items()}
     for key in keys:
-        if key.upper() in normalized:
-            parsed = _parse_float(normalized[key.upper()])
+        normalized_key = _normalize_history_key(key)
+        if normalized_key in normalized:
+            parsed = _parse_float(normalized[normalized_key])
             if parsed is not None:
                 return parsed
     return None
