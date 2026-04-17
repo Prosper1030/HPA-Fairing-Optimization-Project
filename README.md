@@ -298,7 +298,11 @@ python scripts/prepare_su2_shortlist.py \
 
 - `validation_manifest.json`
 - `validation_manifest.md`
+- `shortlist_report.json`
+- `shortlist_report.md`
 - `run_all_su2_cases.sh`
+
+其中最適合先閱讀的是 `shortlist_report.md`，它會把 shortlist 的 proxy score、Drag、Cd、來源代數與建議重點整理成一份比較報告。
 
 目前的範圍是「準備可重現的 SU2 驗證工作包」：
 
