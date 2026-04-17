@@ -63,6 +63,21 @@ DEFAULT_EXAMPLE_GENE = {
     "w3": 0.10,
 }
 
+REPRESENTATIVE_THRESHOLDS = {
+    "fineness_slender_min": 2.9,
+    "fineness_short_fat_max": 2.27,
+    "x_peak_forward_max": 0.25,
+    "x_peak_aft_min": 0.40,
+    "pressure_risk_aggressive_min": 0.85,
+    "pressure_risk_conservative_max": 0.35,
+    "tail_top_aggressive_min": 48.0,
+    "tail_bottom_aggressive_min": 26.0,
+    "tail_side_aggressive_min": 16.0,
+    "tail_top_conservative_max": 36.0,
+    "tail_bottom_conservative_max": 15.0,
+    "tail_side_conservative_max": 11.0,
+}
+
 
 class AnalysisInputError(ValueError):
     """Raised when analysis input is incomplete or malformed."""
@@ -268,27 +283,27 @@ def build_representative_case_metadata(result: dict) -> dict:
     side_tail = float(tail["side_deg"])
 
     tags: list[str] = []
-    if fineness >= 4.6:
+    if fineness >= REPRESENTATIVE_THRESHOLDS["fineness_slender_min"]:
         tags.append("slender")
-    elif fineness <= 4.0:
+    elif fineness <= REPRESENTATIVE_THRESHOLDS["fineness_short_fat_max"]:
         tags.append("short_fat")
 
-    if x_peak <= 0.27:
+    if x_peak <= REPRESENTATIVE_THRESHOLDS["x_peak_forward_max"]:
         tags.append("peak_forward")
-    elif x_peak >= 0.40:
+    elif x_peak >= REPRESENTATIVE_THRESHOLDS["x_peak_aft_min"]:
         tags.append("peak_aft")
 
     aggressive_tail = (
-        pressure_risk >= 0.65
-        or bottom_tail > 18.0
-        or top_tail > 40.0
-        or side_tail > 15.0
+        pressure_risk >= REPRESENTATIVE_THRESHOLDS["pressure_risk_aggressive_min"]
+        or bottom_tail >= REPRESENTATIVE_THRESHOLDS["tail_bottom_aggressive_min"]
+        or top_tail >= REPRESENTATIVE_THRESHOLDS["tail_top_aggressive_min"]
+        or side_tail >= REPRESENTATIVE_THRESHOLDS["tail_side_aggressive_min"]
     )
     conservative_tail = (
-        pressure_risk <= 0.35
-        and bottom_tail <= 12.0
-        and top_tail <= 28.0
-        and side_tail <= 10.0
+        pressure_risk <= REPRESENTATIVE_THRESHOLDS["pressure_risk_conservative_max"]
+        and bottom_tail <= REPRESENTATIVE_THRESHOLDS["tail_bottom_conservative_max"]
+        and top_tail <= REPRESENTATIVE_THRESHOLDS["tail_top_conservative_max"]
+        and side_tail <= REPRESENTATIVE_THRESHOLDS["tail_side_conservative_max"]
     )
     if aggressive_tail:
         tags.append("tail_aggressive")

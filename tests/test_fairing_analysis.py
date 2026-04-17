@@ -105,12 +105,17 @@ class TestFairingAnalysis(unittest.TestCase):
         self.assertIn("tail_aggressive", analysis["RepresentativeTags"])
         self.assertGreater(analysis["GeometryTraits"]["PressureRisk"], 0.65)
 
+    def test_example_gene_now_maps_to_mid_pack_in_family_distribution(self):
+        analysis = analyze_gene(get_example_gene(), preset="none")
+
+        self.assertEqual(analysis["RepresentativeTags"], ["mid_pack"])
+
     def test_representative_metadata_defaults_to_mid_pack_when_no_extreme_tag(self):
         metadata = build_representative_case_metadata(
             {
-                "FinenessRatio": 4.3,
+                "FinenessRatio": 2.6,
                 "XPeakAreaFrac": 0.33,
-                "TailAngles": {"top_deg": 30.0, "bottom_deg": 13.0, "side_deg": 11.0},
+                "TailAngles": {"top_deg": 38.0, "bottom_deg": 18.0, "side_deg": 12.5},
                 "Quality": {
                     "pressure_risk": 0.45,
                     "area_monotonicity": 0.99,
@@ -120,6 +125,24 @@ class TestFairingAnalysis(unittest.TestCase):
         )
 
         self.assertEqual(metadata["RepresentativeTags"], ["mid_pack"])
+
+    def test_representative_metadata_can_emit_slender_and_tail_conservative(self):
+        metadata = build_representative_case_metadata(
+            {
+                "FinenessRatio": 3.1,
+                "XPeakAreaFrac": 0.23,
+                "TailAngles": {"top_deg": 34.0, "bottom_deg": 13.5, "side_deg": 10.5},
+                "Quality": {
+                    "pressure_risk": 0.28,
+                    "area_monotonicity": 0.99,
+                    "recovery_curvature": 0.02,
+                },
+            }
+        )
+
+        self.assertIn("slender", metadata["RepresentativeTags"])
+        self.assertIn("peak_forward", metadata["RepresentativeTags"])
+        self.assertIn("tail_conservative", metadata["RepresentativeTags"])
 
     def test_partial_gene_can_be_filled_from_example(self):
         with tempfile.TemporaryDirectory() as temp_dir:
