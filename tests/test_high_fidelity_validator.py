@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -79,6 +80,11 @@ class TestHighFidelityValidator(unittest.TestCase):
             self.assertIn('drawAxisLine(origin, py, "#2f9e44", "Y")', preview_html)
             self.assertIn('drawAxisLine(origin, pz, "#1c7ed6", "Z")', preview_html)
             self.assertIn('applyPreset(preset.value || "isometric")', preview_html)
+            payload_match = re.search(r"const geometry = (\{.*?\});", preview_html, re.DOTALL)
+            self.assertIsNotNone(payload_match)
+            geometry_payload = json.loads(payload_match.group(1))
+            z_values = [float(item["z"]) for item in geometry_payload["vertices"]]
+            self.assertGreater(max(z_values), abs(min(z_values)))
 
             with open(os.path.join(case_dir, "su2_case.cfg"), "r", encoding="utf-8") as handle:
                 config_text = handle.read()

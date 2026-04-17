@@ -154,6 +154,26 @@ def _normalize_mesh(
     return [tuple(point - center) for point in arr.tolist()], tuple(center.tolist()), float(extent if extent > 0 else 1.0)
 
 
+def _prepare_preview_vertices(
+    vertices: list[tuple[float, float, float]],
+) -> tuple[list[tuple[float, float, float]], tuple[float, float, float], float]:
+    arr = np.asarray(vertices, dtype=float)
+    min_values = np.min(arr, axis=0)
+    max_values = np.max(arr, axis=0)
+    # Preserve the geometric z=0 reference for side/front views while still
+    # centering the shape in x/y on screen.
+    center = np.array(
+        [
+            0.5 * (min_values[0] + max_values[0]),
+            0.5 * (min_values[1] + max_values[1]),
+            0.0,
+        ],
+        dtype=float,
+    )
+    extent = np.max(max_values - min_values)
+    return [tuple(point - center) for point in arr.tolist()], tuple(center.tolist()), float(extent if extent > 0 else 1.0)
+
+
 def _write_obj(vertices: list[tuple[float, float, float]], faces: list[tuple[int, int, int]], path: Path) -> None:
     lines = ["# Fairing surface OBJ"]
     for x_value, y_value, z_value in vertices:
@@ -480,6 +500,7 @@ def _write_exports(
         return {"Produced": produced, "Warnings": warnings}
 
     centered_vertices, _, _ = _normalize_mesh(vertices)
+    preview_vertices, _, _ = _prepare_preview_vertices(vertices)
 
     if "stl" in exports:
         path = output_dir / "fairing_surface.stl"
@@ -493,7 +514,7 @@ def _write_exports(
 
     if "preview" in exports:
         path = output_dir / "geometry_preview.html"
-        _write_preview_html(centered_vertices, faces, metrics, path)
+        _write_preview_html(preview_vertices, faces, metrics, path)
         produced["preview_html"] = str(path)
 
     if "step" in exports or "brep" in exports:
