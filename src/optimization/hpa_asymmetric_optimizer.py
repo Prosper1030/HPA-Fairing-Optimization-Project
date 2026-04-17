@@ -59,6 +59,256 @@ def _json_default(value):
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
+_CANONICAL_GENE_BOUNDS = {
+    # === 幾何主尺度（6個）===
+    'L': (1.8, 3.0),                     # 整流罩總長 (m)
+    'W_max': (0.48, 0.65),               # 最大全寬 (m)
+    'H_max': (1.05, 1.70),               # 最大總厚度 (m)
+    'camber_peak': (0.0, 0.50),          # 峰值站位的中心線高度 (m)
+    'X_peak': (0.2, 0.5),                # 最大寬度/厚度位置
+    'X_offset': (0.5, 1.0),              # 踏板位置 (m)
+
+    # === 半寬曲線控制（4個，皆為相對峰值比例）===
+    'width_le_ctrl_1': (0.08, 0.36),
+    'width_le_ctrl_2': (0.50, 0.92),
+    'width_te_ctrl_1': (0.48, 0.95),
+    'width_te_ctrl_2': (0.03, 0.38),
+
+    # === 總厚度曲線控制（4個，皆為相對峰值比例）===
+    'height_le_ctrl_1': (0.12, 0.42),
+    'height_le_ctrl_2': (0.56, 0.94),
+    'height_te_ctrl_1': (0.46, 0.95),
+    'height_te_ctrl_2': (0.02, 0.32),
+
+    # === 中心線尾段控制（3個）===
+    'centerline_te_ctrl_1': (0.05, 0.60),   # 從 peak_center → tail_z 的相對進度
+    'centerline_te_ctrl_2': (0.35, 0.95),
+    'tail_z': (0.05, 0.20),                 # 尾端中心線高度 (m)
+
+    # === 超橢圓參數（4個，上下分開）===
+    'M_top': (2.0, 4.0),
+    'N_top': (2.0, 4.0),
+    'M_bot': (2.0, 4.0),
+    'N_bot': (2.0, 4.0),
+}
+
+_LEGACY_GENE_BOUNDS = {
+    'L': (1.8, 3.0),
+    'W_max': (0.48, 0.65),
+    'H_top_max': (0.85, 1.15),
+    'H_bot_max': (0.25, 0.50),
+    'N1': (0.4, 0.9),
+    'N2_top': (0.5, 1.0),
+    'N2_bot': (0.5, 1.0),
+    'X_max_pos': (0.2, 0.5),
+    'X_offset': (0.5, 1.0),
+    'M_top': (2.0, 4.0),
+    'N_top': (2.0, 4.0),
+    'M_bot': (2.0, 4.0),
+    'N_bot': (2.0, 4.0),
+    'tail_rise': (0.05, 0.20),
+    'blend_start': (0.65, 0.85),
+    'blend_power': (1.5, 3.0),
+    'w0': (0.15, 0.35),
+    'w1': (0.25, 0.45),
+    'w2': (0.20, 0.40),
+    'w3': (0.05, 0.20),
+}
+
+_CANONICAL_ONLY_FIELDS = set(_CANONICAL_GENE_BOUNDS) - {'L', 'W_max', 'X_offset', 'M_top', 'N_top', 'M_bot', 'N_bot'}
+_LEGACY_ONLY_FIELDS = set(_LEGACY_GENE_BOUNDS) - {'L', 'W_max', 'X_offset', 'M_top', 'N_top', 'M_bot', 'N_bot'}
+
+
+def _coerce_float(value, field_name: str) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"gene 欄位 {field_name} 必須是數值") from exc
+
+
+def _normalized_parameter(value: float, lower: float, upper: float) -> float:
+    if upper <= lower:
+        return 0.5
+    return float(np.clip((float(value) - lower) / (upper - lower), 0.0, 1.0))
+
+
+def _legacy_width_control_overrides(gene: Dict) -> dict[str, float]:
+    w0_n = _normalized_parameter(_coerce_float(gene['w0'], 'w0'), 0.15, 0.35)
+    w1_n = _normalized_parameter(_coerce_float(gene['w1'], 'w1'), 0.25, 0.45)
+    w2_n = _normalized_parameter(_coerce_float(gene['w2'], 'w2'), 0.20, 0.40)
+    w3_n = _normalized_parameter(_coerce_float(gene['w3'], 'w3'), 0.05, 0.20)
+
+    left_1 = 0.08 + 0.28 * w0_n
+    left_2 = min(0.92, max(left_1 + 0.10, 0.50 + 0.28 * w1_n))
+    right_2 = 0.03 + 0.35 * w3_n
+    right_1 = min(0.95, max(right_2 + 0.18, 0.48 + 0.34 * w2_n))
+
+    return {
+        'width_le_ctrl_1': float(left_1),
+        'width_le_ctrl_2': float(left_2),
+        'width_te_ctrl_1': float(right_1),
+        'width_te_ctrl_2': float(right_2),
+    }
+
+
+def _legacy_height_control_overrides(gene: Dict) -> dict[str, float]:
+    n1_n = _normalized_parameter(_coerce_float(gene['N1'], 'N1'), 0.4, 0.9)
+    n2_avg = 0.5 * (
+        _coerce_float(gene['N2_top'], 'N2_top') + _coerce_float(gene['N2_bot'], 'N2_bot')
+    )
+    n2_avg_n = _normalized_parameter(n2_avg, 0.5, 1.0)
+
+    nose_bluntness = 1.0 - n1_n
+    tail_fullness = 1.0 - n2_avg_n
+
+    left_1 = 0.12 + 0.30 * nose_bluntness
+    left_2 = min(0.94, max(left_1 + 0.12, 0.56 + 0.24 * nose_bluntness))
+    right_2 = 0.02 + 0.30 * tail_fullness
+    right_1 = min(0.95, max(right_2 + 0.18, 0.46 + 0.32 * tail_fullness))
+
+    return {
+        'height_le_ctrl_1': float(left_1),
+        'height_le_ctrl_2': float(left_2),
+        'height_te_ctrl_1': float(right_1),
+        'height_te_ctrl_2': float(right_2),
+    }
+
+
+def _legacy_centerline_overrides(gene: Dict) -> dict[str, float]:
+    top_peak = _coerce_float(gene['H_top_max'], 'H_top_max')
+    bot_peak = _coerce_float(gene['H_bot_max'], 'H_bot_max')
+    peak_center = 0.5 * (top_peak - bot_peak)
+    tail_rise = _coerce_float(gene['tail_rise'], 'tail_rise')
+    peak_position = float(np.clip(_coerce_float(gene.get('X_max_pos', 0.25), 'X_max_pos'), 0.15, 0.85))
+
+    tail_start = float(np.clip(
+        _coerce_float(gene.get('blend_start', 0.75), 'blend_start'),
+        peak_position + 0.05,
+        0.97,
+    ))
+    tail_hold = (tail_start - peak_position) / max(1.0 - peak_position, 1e-9)
+    power_n = _normalized_parameter(_coerce_float(gene.get('blend_power', 2.0), 'blend_power'), 1.5, 3.0)
+    tail_balance = float(np.clip(
+        (
+            _coerce_float(gene['N2_bot'], 'N2_bot')
+            - _coerce_float(gene['N2_top'], 'N2_top')
+        ) / 0.5,
+        -1.0,
+        1.0,
+    ))
+
+    h_max = top_peak + bot_peak
+    thickness_max = max(h_max, 1e-6)
+    progress_1 = float(np.clip(0.14 + 0.26 * (1.0 - tail_hold) + 0.10 * (1.0 - power_n), 0.05, 0.60))
+    progress_2 = float(np.clip(0.62 + 0.18 * (1.0 - tail_hold) + 0.08 * (1.0 - power_n), 0.40, 0.95))
+    bias = 0.08 * tail_balance * thickness_max
+    zc_min = min(peak_center, tail_rise) - 0.20 * thickness_max
+    zc_max = max(peak_center, tail_rise) + 0.20 * thickness_max
+
+    right_1 = float(np.clip(peak_center + progress_1 * (tail_rise - peak_center) + 0.5 * bias, zc_min, zc_max))
+    right_2 = float(np.clip(peak_center + progress_2 * (tail_rise - peak_center) + 0.2 * bias, zc_min, zc_max))
+
+    delta = tail_rise - peak_center
+    if abs(delta) <= 1e-9:
+        ctrl_1 = 0.30
+        ctrl_2 = 0.70
+    else:
+        ctrl_1 = float(np.clip((right_1 - peak_center) / delta, 0.0, 1.0))
+        ctrl_2 = float(np.clip((right_2 - peak_center) / delta, 0.0, 1.0))
+
+    return {
+        'centerline_te_ctrl_1': ctrl_1,
+        'centerline_te_ctrl_2': ctrl_2,
+        'tail_z': tail_rise,
+    }
+
+
+def _extract_canonical_overrides(gene: Dict) -> tuple[dict[str, float], dict[str, object]]:
+    overrides: dict[str, float] = {}
+    used_canonical_fields: list[str] = []
+    used_legacy_fields: list[str] = []
+
+    for key in _CANONICAL_GENE_BOUNDS:
+        if key in gene:
+            overrides[key] = _coerce_float(gene[key], key)
+            used_canonical_fields.append(key)
+
+    if 'X_max_pos' in gene:
+        overrides['X_peak'] = _coerce_float(gene['X_max_pos'], 'X_max_pos')
+        used_legacy_fields.append('X_max_pos')
+
+    if 'H_top_max' in gene and 'H_bot_max' in gene:
+        top_peak = _coerce_float(gene['H_top_max'], 'H_top_max')
+        bot_peak = _coerce_float(gene['H_bot_max'], 'H_bot_max')
+        overrides['H_max'] = top_peak + bot_peak
+        overrides['camber_peak'] = 0.5 * (top_peak - bot_peak)
+        used_legacy_fields.extend(['H_top_max', 'H_bot_max'])
+
+    if all(key in gene for key in ('w0', 'w1', 'w2', 'w3')):
+        overrides.update(_legacy_width_control_overrides(gene))
+        used_legacy_fields.extend(['w0', 'w1', 'w2', 'w3'])
+
+    if all(key in gene for key in ('N1', 'N2_top', 'N2_bot')):
+        overrides.update(_legacy_height_control_overrides(gene))
+        used_legacy_fields.extend(['N1', 'N2_top', 'N2_bot'])
+
+    centerline_fields = ('H_top_max', 'H_bot_max', 'N2_top', 'N2_bot', 'tail_rise', 'blend_start', 'blend_power')
+    if all(key in gene for key in centerline_fields):
+        overrides.update(_legacy_centerline_overrides(gene))
+        used_legacy_fields.extend(list(centerline_fields))
+    elif 'tail_rise' in gene:
+        overrides['tail_z'] = _coerce_float(gene['tail_rise'], 'tail_rise')
+        used_legacy_fields.append('tail_rise')
+
+    return overrides, {
+        'used_canonical_fields': sorted(set(used_canonical_fields)),
+        'used_legacy_fields': sorted(set(used_legacy_fields)),
+    }
+
+
+def _canonicalize_gene_dict(gene: Dict, fallback_gene: Dict | None = None) -> tuple[dict[str, float], dict[str, object]]:
+    if not isinstance(gene, dict):
+        raise ValueError("gene 必須是 JSON 物件")
+
+    fallback_canonical: dict[str, float] = {}
+    if fallback_gene is not None:
+        if not isinstance(fallback_gene, dict):
+            raise ValueError("fallback_gene 必須是 JSON 物件")
+        fallback_canonical, _ = _extract_canonical_overrides(fallback_gene)
+
+    overrides, override_metadata = _extract_canonical_overrides(gene)
+
+    canonical = dict(fallback_canonical)
+    filled_fields = [key for key in _CANONICAL_GENE_BOUNDS if key not in overrides and key in fallback_canonical]
+    canonical.update(overrides)
+
+    missing = [key for key in _CANONICAL_GENE_BOUNDS if key not in canonical]
+    if missing:
+        raise ValueError(f"gene 缺少必要欄位: {', '.join(missing)}")
+
+    normalized = {key: _coerce_float(canonical[key], key) for key in _CANONICAL_GENE_BOUNDS}
+    used_legacy_fields = override_metadata['used_legacy_fields']
+    used_canonical_fields = override_metadata['used_canonical_fields']
+    used_legacy_specific = [field for field in used_legacy_fields if field in _LEGACY_ONLY_FIELDS]
+    used_canonical_specific = [field for field in used_canonical_fields if field in _CANONICAL_ONLY_FIELDS]
+
+    if used_legacy_specific and used_canonical_specific:
+        input_schema = "mixed"
+    elif used_legacy_specific:
+        input_schema = "legacy"
+    else:
+        input_schema = "canonical"
+
+    return normalized, {
+        'filled_fields': filled_fields,
+        'input_schema': input_schema,
+        'used_legacy_fields': used_legacy_fields,
+        'used_canonical_fields': used_canonical_fields,
+        'used_legacy_specific_fields': used_legacy_specific,
+        'used_canonical_specific_fields': used_canonical_specific,
+    }
+
+
 class ProjectManager:
     """管理專案輸出目錄和檔案"""
 
@@ -147,9 +397,7 @@ class CST_Modeler:
 
     @staticmethod
     def _normalized_parameter(value: float, lower: float, upper: float) -> float:
-        if upper <= lower:
-            return 0.5
-        return float(np.clip((float(value) - lower) / (upper - lower), 0.0, 1.0))
+        return _normalized_parameter(value, lower, upper)
 
     @staticmethod
     def _clip_peak_position(value: float) -> float:
@@ -211,16 +459,10 @@ class CST_Modeler:
     @staticmethod
     def _build_width_curve(psi: np.ndarray, gene: Dict, peak_position: float) -> np.ndarray:
         width_peak = max(float(gene['W_max']) * 0.5, 1e-6)
-
-        w0_n = CST_Modeler._normalized_parameter(gene.get('w0', 0.25), 0.15, 0.35)
-        w1_n = CST_Modeler._normalized_parameter(gene.get('w1', 0.35), 0.25, 0.45)
-        w2_n = CST_Modeler._normalized_parameter(gene.get('w2', 0.30), 0.20, 0.40)
-        w3_n = CST_Modeler._normalized_parameter(gene.get('w3', 0.10), 0.05, 0.20)
-
-        left_1 = width_peak * (0.08 + 0.28 * w0_n)
-        left_2 = width_peak * min(0.92, max((left_1 / width_peak) + 0.10, 0.50 + 0.28 * w1_n))
-        right_2 = width_peak * (0.03 + 0.35 * w3_n)
-        right_1 = width_peak * min(0.95, max((right_2 / width_peak) + 0.18, 0.48 + 0.34 * w2_n))
+        left_1 = width_peak * float(np.clip(gene['width_le_ctrl_1'], 0.0, 0.98))
+        left_2 = width_peak * float(np.clip(gene['width_le_ctrl_2'], 0.0, 0.98))
+        right_1 = width_peak * float(np.clip(gene['width_te_ctrl_1'], 0.0, 0.98))
+        right_2 = width_peak * float(np.clip(gene['width_te_ctrl_2'], 0.0, 0.98))
 
         return CST_Modeler._piecewise_bezier_curve(
             psi,
@@ -234,19 +476,11 @@ class CST_Modeler:
 
     @staticmethod
     def _build_thickness_curve(psi: np.ndarray, gene: Dict, peak_position: float) -> np.ndarray:
-        thickness_peak = max(float(gene['H_top_max']) + float(gene['H_bot_max']), 1e-6)
-
-        n1_n = CST_Modeler._normalized_parameter(gene['N1'], 0.4, 0.9)
-        n2_avg = 0.5 * (float(gene['N2_top']) + float(gene['N2_bot']))
-        n2_avg_n = CST_Modeler._normalized_parameter(n2_avg, 0.5, 1.0)
-
-        nose_bluntness = 1.0 - n1_n
-        tail_fullness = 1.0 - n2_avg_n
-
-        left_1 = thickness_peak * (0.12 + 0.30 * nose_bluntness)
-        left_2 = thickness_peak * min(0.94, max((left_1 / thickness_peak) + 0.12, 0.56 + 0.24 * nose_bluntness))
-        right_2 = thickness_peak * (0.02 + 0.30 * tail_fullness)
-        right_1 = thickness_peak * min(0.95, max((right_2 / thickness_peak) + 0.18, 0.46 + 0.32 * tail_fullness))
+        thickness_peak = max(float(gene['H_max']), 1e-6)
+        left_1 = thickness_peak * float(np.clip(gene['height_le_ctrl_1'], 0.0, 0.98))
+        left_2 = thickness_peak * float(np.clip(gene['height_le_ctrl_2'], 0.0, 0.98))
+        right_1 = thickness_peak * float(np.clip(gene['height_te_ctrl_1'], 0.0, 0.98))
+        right_2 = thickness_peak * float(np.clip(gene['height_te_ctrl_2'], 0.0, 0.98))
 
         return CST_Modeler._piecewise_bezier_curve(
             psi,
@@ -265,37 +499,25 @@ class CST_Modeler:
         peak_position: float,
         thickness_curve: np.ndarray,
     ) -> np.ndarray:
-        top_peak = float(gene['H_top_max'])
-        bot_peak = float(gene['H_bot_max'])
-        peak_center = 0.5 * (top_peak - bot_peak)
-        tail_rise = float(gene.get('tail_rise', 0.10))
-
-        tail_start = float(np.clip(gene.get('blend_start', 0.75), peak_position + 0.05, 0.97))
-        tail_hold = (tail_start - peak_position) / max(1.0 - peak_position, 1e-9)
-        power_n = CST_Modeler._normalized_parameter(gene.get('blend_power', 2.0), 1.5, 3.0)
-        tail_balance = float(np.clip((float(gene['N2_bot']) - float(gene['N2_top'])) / 0.5, -1.0, 1.0))
-
+        peak_center = float(gene['camber_peak'])
+        tail_z = float(gene['tail_z'])
         peak_half_thickness = max(0.5 * float(np.max(thickness_curve)), 1e-6)
         asymmetry = abs(peak_center) / peak_half_thickness
 
         left_1 = peak_center * (0.18 + 0.18 * asymmetry)
         left_2 = peak_center * (0.72 + 0.10 * asymmetry)
 
-        progress_1 = float(np.clip(0.14 + 0.26 * (1.0 - tail_hold) + 0.10 * (1.0 - power_n), 0.05, 0.60))
-        progress_2 = float(np.clip(0.62 + 0.18 * (1.0 - tail_hold) + 0.08 * (1.0 - power_n), 0.40, 0.95))
-        bias = 0.08 * tail_balance * float(np.max(thickness_curve))
-        zc_min = min(peak_center, tail_rise) - 0.20 * float(np.max(thickness_curve))
-        zc_max = max(peak_center, tail_rise) + 0.20 * float(np.max(thickness_curve))
-
-        right_1 = float(np.clip(peak_center + progress_1 * (tail_rise - peak_center) + 0.5 * bias, zc_min, zc_max))
-        right_2 = float(np.clip(peak_center + progress_2 * (tail_rise - peak_center) + 0.2 * bias, zc_min, zc_max))
+        right_1_ratio = float(np.clip(gene['centerline_te_ctrl_1'], 0.0, 1.0))
+        right_2_ratio = float(np.clip(gene['centerline_te_ctrl_2'], 0.0, 1.0))
+        right_1 = peak_center + right_1_ratio * (tail_z - peak_center)
+        right_2 = peak_center + right_2_ratio * (tail_z - peak_center)
 
         return CST_Modeler._piecewise_bezier_curve(
             psi,
             peak_position,
             0.0,
             peak_center,
-            tail_rise,
+            tail_z,
             (left_1, left_2),
             (right_1, right_2),
         )
@@ -394,42 +616,29 @@ class CST_Modeler:
         """
         生成非對稱整流罩曲線
 
-        基因參數：
-        - L: 總長度 (m)
-        - W_max: 最大全寬 (Full Width) - 注意：代入 CST 時需除以 2
-        - H_top_max: 上部最大高度 (Upper Radius) - 已經是半徑
-        - H_bot_max: 下部最大高度 (Lower Radius) - 已經是半徑
-        - N1: 機頭形狀係數
-        - N2_top: 上機尾形狀係數
-        - N2_bot: 下機尾形狀係數
-        - X_max_pos: 最大截面位置 (0-1)
-        - X_offset: 踏板位置 (m)
-        - Super_M, Super_N: 超橢圓指數（可選）
-        - tail_rise: 機尾上升高度（可選）
-        - blend_start: 混合開始位置（可選）
-        - blend_power: 混合曲線冪次（可選）
-        - w0, w1, w2, w3: CST權重（可選）
+        正式基因參數：
+        - L, W_max, H_max, camber_peak, X_peak, X_offset
+        - width_le_ctrl_1/2, width_te_ctrl_1/2
+        - height_le_ctrl_1/2, height_te_ctrl_1/2
+        - centerline_te_ctrl_1/2, tail_z
+        - M_top/N_top/M_bot/N_bot
+
+        同時保留 legacy gene 相容：若呼叫端仍提供 H_top_max / N1 / w0..w3 /
+        blend_* 等欄位，會先轉成 canonical schema 再生成幾何。
         """
-        # 保留 legacy 欄位供下游分析與 JSON 相容，但真正的幾何主幹
-        # 已改成 w(x) / H(x) / z_c(x) 三條縱向曲線。
-        w0 = gene.get('w0', 0.25)
-        w1 = gene.get('w1', 0.35)
-        w2 = gene.get('w2', 0.30)
-        w3 = gene.get('w3', 0.10)
-        weights = np.array([w0, w1, w2, w3], dtype=float)
+        gene, _ = _canonicalize_gene_dict(gene)
 
         # 生成截面位置 - 使用餘弦分布（機頭機尾密集）
         psi_list = SectionDistribution.cosine_full(num_sections, min_spacing=0.001)
         psi = np.array(psi_list, dtype=float)
-        x_max_pos = CST_Modeler._clip_peak_position(gene.get('X_max_pos', 0.25))
-        if not np.any(np.isclose(psi, x_max_pos, atol=1e-9)):
-            psi = np.sort(np.append(psi, x_max_pos))
+        x_peak = CST_Modeler._clip_peak_position(gene.get('X_peak', 0.25))
+        if not np.any(np.isclose(psi, x_peak, atol=1e-9)):
+            psi = np.sort(np.append(psi, x_peak))
         x = psi * gene['L']
 
-        N2_avg = (gene['N2_top'] + gene['N2_bot']) / 2.0
-        width_half = CST_Modeler._build_width_curve(psi, gene, x_max_pos)
-        super_height = CST_Modeler._build_thickness_curve(psi, gene, x_max_pos)
-        z_loc = CST_Modeler._build_centerline_curve(psi, gene, x_max_pos, super_height)
+        width_half = CST_Modeler._build_width_curve(psi, gene, x_peak)
+        super_height = CST_Modeler._build_thickness_curve(psi, gene, x_peak)
+        z_loc = CST_Modeler._build_centerline_curve(psi, gene, x_peak, super_height)
 
         z_upper = z_loc + 0.5 * super_height
         z_lower = z_loc - 0.5 * super_height
@@ -440,15 +649,18 @@ class CST_Modeler:
         z_loc[0] = 0.0
         super_height[0] = 0.0
 
-        tail_rise = float(gene.get('tail_rise', 0.10))
-        z_upper[-1] = tail_rise
-        z_lower[-1] = tail_rise
-        z_loc[-1] = tail_rise
+        tail_z = float(gene.get('tail_z', 0.10))
+        z_upper[-1] = tail_z
+        z_lower[-1] = tail_z
+        z_loc[-1] = tail_z
         super_height[-1] = 0.0
+
+        peak_top = float(gene['camber_peak'] + 0.5 * gene['H_max'])
+        peak_bot = float(0.5 * gene['H_max'] - gene['camber_peak'])
 
         return {
             'L': gene['L'],
-            'X_max_pos': x_max_pos,
+            'X_peak': x_peak,
             'psi': psi,
             'x': x,
             'width_half': width_half,      # 半寬（用於生成截面）
@@ -457,18 +669,19 @@ class CST_Modeler:
             'z_lower': z_lower,            # 下邊界曲線
             'super_height': super_height,  # VSP總厚度
             'z_loc': z_loc,                # VSP幾何中心
-            'N1': gene['N1'],
-            'N2_top': gene['N2_top'],      # 上曲線N2（用於切線計算）
-            'N2_bot': gene['N2_bot'],      # 下曲線N2（用於切線計算）
-            'N2_avg': N2_avg,              # 平均N2（用於左右切線）
+            'W_max': gene['W_max'],
+            'H_max': gene['H_max'],
+            'camber_peak': gene['camber_peak'],
+            'tail_z': tail_z,
+            'X_offset': gene['X_offset'],
+            'H_top_peak': peak_top,
+            'H_bot_peak': peak_bot,
             # 超橢圓參數（上下分開，從基因或使用預設值）
             'M_top': gene.get('M_top', 2.5),
             'N_top': gene.get('N_top', 2.5),
             'M_bot': gene.get('M_bot', 2.5),
             'N_bot': gene.get('N_bot', 2.5),
-            # CST權重（用於切線計算）
-            'weights': weights.tolist(),
-            'parameterization': 'whzc_bezier_v2',
+            'parameterization': 'whzc_bezier_v3',
             # 保留舊格式以便兼容（可選）
             'top': z_upper,
             'bottom': z_lower,
@@ -850,40 +1063,13 @@ class VSPModelGenerator:
 class HPA_Optimizer:
     """HPA 整流罩優化器"""
 
-    # 基因範圍（擴展版：9 → 18 個參數）
-    GENE_BOUNDS = {
-        # === 幾何參數（4個）===
-        'L': (1.8, 3.0),              # 整流罩總長 (m)
-        'W_max': (0.48, 0.65),        # 最大全寬 (m)
-        'H_top_max': (0.85, 1.15),    # 上半部高度 (m)
-        'H_bot_max': (0.25, 0.50),    # 下半部高度 (m)
+    # 正式 GA / analysis schema
+    GENE_BOUNDS = dict(_CANONICAL_GENE_BOUNDS)
+    LEGACY_GENE_BOUNDS = dict(_LEGACY_GENE_BOUNDS)
 
-        # === CST形狀參數（3個）===
-        'N1': (0.4, 0.9),             # Class function N1
-        'N2_top': (0.5, 1.0),         # Shape function N2（上）
-        'N2_bot': (0.5, 1.0),         # Shape function N2（下）
-
-        # === 位置參數（2個）===
-        'X_max_pos': (0.2, 0.5),      # 最大寬度/高度位置
-        'X_offset': (0.5, 1.0),       # 收縮開始位置 (m)
-
-        # === 超橢圓參數（4個，上下分開）===
-        'M_top': (2.0, 4.0),          # 上半部超橢圓指數M
-        'N_top': (2.0, 4.0),          # 上半部超橢圓指數N
-        'M_bot': (2.0, 4.0),          # 下半部超橢圓指數M
-        'N_bot': (2.0, 4.0),          # 下半部超橢圓指數N
-
-        # === 尾部參數（3個）===
-        'tail_rise': (0.05, 0.20),    # 機尾上升高度 (m)
-        'blend_start': (0.65, 0.85),  # 混合開始位置
-        'blend_power': (1.5, 3.0),    # 混合曲線冪次
-
-        # === CST權重（4個）===
-        'w0': (0.15, 0.35),           # 前段斜率
-        'w1': (0.25, 0.45),           # 最大值附近
-        'w2': (0.20, 0.40),           # 後段平滑
-        'w3': (0.05, 0.20),           # 尾部收斂
-    }
+    @staticmethod
+    def canonicalize_gene_dict(gene: Dict, fallback_gene: Dict | None = None) -> tuple[Dict, Dict]:
+        return _canonicalize_gene_dict(gene, fallback_gene=fallback_gene)
 
     def __init__(
         self,
@@ -937,7 +1123,8 @@ class HPA_Optimizer:
     def gene_to_array(self, gene: Dict) -> np.ndarray:
         """基因字典轉陣列"""
         keys = list(self.GENE_BOUNDS.keys())
-        return np.array([gene[k] for k in keys])
+        canonical_gene, _ = self.canonicalize_gene_dict(gene)
+        return np.array([canonical_gene[k] for k in keys], dtype=float)
 
     def array_to_gene(self, arr: np.ndarray) -> Dict:
         """陣列轉基因字典"""

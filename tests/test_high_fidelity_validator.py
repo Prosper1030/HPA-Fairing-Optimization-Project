@@ -95,7 +95,7 @@ class TestHighFidelityValidator(unittest.TestCase):
             self.assertIn("MARKER_FAR= ( farfield )", config_text)
 
             beta_entry = next(entry for entry in saved_manifest["Cases"] if entry["CaseName"] == "beta")
-            self.assertIn("H_top_max", beta_entry["FilledFields"])
+            self.assertIn("H_max", beta_entry["FilledFields"])
             self.assertTrue(beta_entry["Recommendations"])
 
     def test_cli_can_prepare_shortlist_from_batch_summary(self):

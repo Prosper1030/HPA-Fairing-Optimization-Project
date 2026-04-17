@@ -17,6 +17,7 @@ from analysis.fairing_analysis import (
     build_representative_case_metadata,
     get_example_gene,
     load_gene_file,
+    normalize_gene,
     write_analysis_report_bundle,
 )
 
@@ -88,6 +89,14 @@ class TestFairingAnalysis(unittest.TestCase):
         self.assertIn("Drag", analysis)
         self.assertIn("Cd", analysis)
 
+    def test_example_gene_now_uses_canonical_schema(self):
+        example_gene = get_example_gene()
+
+        self.assertIn("H_max", example_gene)
+        self.assertIn("X_peak", example_gene)
+        self.assertNotIn("H_top_max", example_gene)
+        self.assertNotIn("X_max_pos", example_gene)
+
     def test_analysis_reports_representative_tags(self):
         aggressive_gene = {
             **self.gene,
@@ -158,8 +167,16 @@ class TestFairingAnalysis(unittest.TestCase):
 
         self.assertEqual(gene["L"], 2.6)
         self.assertEqual(gene["W_max"], 0.58)
-        self.assertIn("X_max_pos", metadata["filled_fields"])
-        self.assertEqual(gene["X_max_pos"], get_example_gene()["X_max_pos"])
+        self.assertIn("X_peak", metadata["filled_fields"])
+        self.assertEqual(gene["X_peak"], get_example_gene()["X_peak"])
+
+    def test_normalize_gene_translates_legacy_schema_into_canonical_metadata(self):
+        normalized, metadata = normalize_gene(self.gene, return_metadata=True)
+
+        self.assertEqual(metadata["input_schema"], "legacy")
+        self.assertIn("X_max_pos", metadata["used_legacy_fields"])
+        self.assertIn("H_max", normalized)
+        self.assertIn("X_peak", normalized)
 
     def test_cli_smoke_creates_report_bundle(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -231,7 +248,7 @@ class TestFairingAnalysis(unittest.TestCase):
             self.assertTrue(os.path.exists(gene_path))
             with open(gene_path, "r", encoding="utf-8") as handle:
                 payload = json.load(handle)
-            self.assertEqual(payload["X_max_pos"], get_example_gene()["X_max_pos"])
+            self.assertEqual(payload["X_peak"], get_example_gene()["X_peak"])
 
     def test_cli_can_list_required_fields(self):
         proc = subprocess.run(
@@ -247,7 +264,8 @@ class TestFairingAnalysis(unittest.TestCase):
 
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
         self.assertIn("必填 gene 欄位與建議範圍", proc.stdout)
-        self.assertIn("X_max_pos", proc.stdout)
+        self.assertIn("X_peak", proc.stdout)
+        self.assertIn("H_max", proc.stdout)
 
     def test_cli_can_fill_missing_fields_from_example(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -277,7 +295,7 @@ class TestFairingAnalysis(unittest.TestCase):
             with open(os.path.join(out_dir, "summary.json"), "r", encoding="utf-8") as handle:
                 payload = json.load(handle)
 
-            self.assertIn("X_max_pos", payload["GeneMetadata"]["filled_fields"])
+            self.assertIn("X_peak", payload["GeneMetadata"]["filled_fields"])
 
     def test_cli_batch_mode_creates_ranked_summary(self):
         with tempfile.TemporaryDirectory() as temp_dir:

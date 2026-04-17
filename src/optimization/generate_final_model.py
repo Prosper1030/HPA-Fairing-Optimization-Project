@@ -88,8 +88,6 @@ def generate_final_model(gene, output_filepath, verbose=True):
     vsp.Update()
 
     # 設置每個截面
-    weights_fixed = [0.25, 0.35, 0.30, 0.10]
-
     for i in range(40):
         psi = curves['psi'][i]
         is_nose = (i == 0)
@@ -127,20 +125,17 @@ def generate_final_model(gene, output_filepath, verbose=True):
             asymmetric_angles = CSTDerivatives.compute_asymmetric_tangent_angles(
                 curves['x'], curves['z_upper'], curves['z_lower'], i
             )
-
-            N1 = curves['N1']
-            N2_avg = curves['N2_avg']
-            tangent_lr = CSTDerivatives.compute_tangent_angles_for_section(
-                psi, N1, N2_avg, weights_fixed, weights_fixed, curves['L']
+            side_angle = CSTDerivatives.curve_tangent_angle(
+                curves['x'], curves['width_half'], i
             )
 
             vsp.SetXSecContinuity(xsec, 1)
             vsp.SetXSecTanAngles(
                 xsec, vsp.XSEC_BOTH_SIDES,
                 asymmetric_angles['top'],
-                tangent_lr['right'],
+                side_angle,
                 asymmetric_angles['bottom'],
-                tangent_lr['left']
+                side_angle
             )
 
             # 強度

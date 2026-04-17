@@ -40,7 +40,7 @@ DEFAULT_ANALYSIS_CONFIG = {
     },
 }
 
-DEFAULT_EXAMPLE_GENE = {
+DEFAULT_EXAMPLE_GENE_LEGACY = {
     "L": 2.5,
     "W_max": 0.60,
     "H_top_max": 0.95,
@@ -272,7 +272,7 @@ def get_gene_field_bounds() -> dict[str, tuple[float, float]]:
 
 
 def get_example_gene() -> dict:
-    return dict(DEFAULT_EXAMPLE_GENE)
+    return normalize_gene(DEFAULT_EXAMPLE_GENE_LEGACY)
 
 
 def get_representative_gene_cases() -> list[dict]:
@@ -300,6 +300,17 @@ def format_required_gene_fields() -> str:
     for field in get_required_gene_fields():
         lower, upper = bounds[field]
         lines.append(f"- {field}: {lower:g} ~ {upper:g}")
+    lines.extend(
+        [
+            "",
+            "接受 legacy 欄位並自動轉換，例如：",
+            "- H_top_max + H_bot_max -> H_max + camber_peak",
+            "- X_max_pos -> X_peak",
+            "- w0..w3 -> width_* controls",
+            "- N1/N2_top/N2_bot -> height_* controls",
+            "- tail_rise/blend_* -> centerline_* + tail_z",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -309,30 +320,17 @@ def normalize_gene(
     fallback_gene: dict | None = None,
     return_metadata: bool = False,
 ) -> dict | tuple[dict, dict]:
-    if not isinstance(gene, dict):
-        raise AnalysisInputError("gene 必須是 JSON 物件")
-
-    normalized = dict(gene)
     _, _, optimizer_cls = _optimizer_dependencies()
-    fallback = dict(fallback_gene or {})
-    filled_fields: list[str] = []
-    for key in optimizer_cls.GENE_BOUNDS:
-        if key not in normalized and key in fallback:
-            normalized[key] = fallback[key]
-            filled_fields.append(key)
-
-    missing = [key for key in optimizer_cls.GENE_BOUNDS if key not in normalized]
-    if missing:
-        raise AnalysisInputError(f"gene 缺少必要欄位: {', '.join(missing)}")
-
-    for key in optimizer_cls.GENE_BOUNDS:
-        try:
-            normalized[key] = float(normalized[key])
-        except (TypeError, ValueError) as exc:
-            raise AnalysisInputError(f"gene 欄位 {key} 必須是數值") from exc
+    try:
+        normalized, metadata = optimizer_cls.canonicalize_gene_dict(
+            gene,
+            fallback_gene=fallback_gene,
+        )
+    except ValueError as exc:
+        raise AnalysisInputError(str(exc)) from exc
 
     if return_metadata:
-        return normalized, {"filled_fields": filled_fields}
+        return normalized, metadata
 
     return normalized
 
