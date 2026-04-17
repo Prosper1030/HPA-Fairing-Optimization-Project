@@ -38,6 +38,7 @@ DEFAULT_SU2_SETTINGS = {
     "iterations": 1500,
     "inner_iterations": 50,
     "cfl": 10.0,
+    "conv_num_method_flow": "FDS",
     "marker_wall": "fairing",
     "marker_far": "farfield",
     "mesh_filename": "fairing_mesh.su2",
@@ -385,6 +386,7 @@ def _build_su2_config(case_name: str, gene: dict, flow_conditions: dict, su2_set
         f"INNER_ITER= {int(su2_settings['inner_iterations'])}\n"
         "CONV_FIELD= DRAG\n"
         "CONV_RESIDUAL_MINVAL= -10\n"
+        f"CONV_NUM_METHOD_FLOW= {su2_settings['conv_num_method_flow']}\n"
         f"CFL_NUMBER= {float(su2_settings['cfl']):.2f}\n"
         "CFL_ADAPT= NO\n"
         "TIME_DOMAIN= NO\n"

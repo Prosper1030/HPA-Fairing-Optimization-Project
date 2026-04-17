@@ -70,6 +70,7 @@ class TestHighFidelityValidator(unittest.TestCase):
             with open(os.path.join(case_dir, "su2_case.cfg"), "r", encoding="utf-8") as handle:
                 config_text = handle.read()
             self.assertIn("SOLVER= INC_NAVIER_STOKES", config_text)
+            self.assertIn("CONV_NUM_METHOD_FLOW= FDS", config_text)
             self.assertIn("MARKER_FAR= ( farfield )", config_text)
 
             beta_entry = next(entry for entry in saved_manifest["Cases"] if entry["CaseName"] == "beta")
