@@ -74,7 +74,7 @@ class TestDragProxyMetrics(unittest.TestCase):
             CST_Modeler.generate_asymmetric_fairing(steep_tail_gene, num_sections=160)
         )
 
-        self.assertEqual(result["Model"], "fast_drag_proxy_v3")
+        self.assertEqual(result["Model"], "fast_drag_proxy_v4")
         self.assertGreater(result["Cd_pressure"], 0.015)
         self.assertGreater(result["Quality"]["pressure_risk"], 0.65)
 
@@ -114,8 +114,14 @@ class TestDragProxyMetrics(unittest.TestCase):
         self.assertLess(relative_error, 0.35)
 
     def test_evaluate_gene_proxy_details_are_self_consistent(self):
+        valid_hpa_gene = {
+            **self.base_gene,
+            "X_offset": 0.6,
+            "W_max": 0.65,
+            "H_bot_max": 0.40,
+        }
         result = evaluate_gene(
-            self.base_gene,
+            valid_hpa_gene,
             "proxy_detail_test",
             W_area_penalty=0.1,
             analysis_mode="proxy",
@@ -125,6 +131,25 @@ class TestDragProxyMetrics(unittest.TestCase):
         self.assertTrue(result["Valid"])
         self.assertIn("LaminarFraction", result)
         self.assertAlmostEqual(result["Score"], result["Drag"] + 0.1 * result["Swet"], places=6)
+
+    def test_proxy_uses_distinct_superellipse_m_and_n_instead_of_only_their_average(self):
+        proxy = FairingDragProxy()
+        top_flat_side_round = {
+            **self.base_gene,
+            "M_top": 4.0,
+            "N_top": 2.0,
+        }
+        top_round_side_flat = {
+            **self.base_gene,
+            "M_top": 2.0,
+            "N_top": 4.0,
+        }
+
+        result_a = proxy.evaluate_curves(CST_Modeler.generate_asymmetric_fairing(top_flat_side_round, num_sections=160))
+        result_b = proxy.evaluate_curves(CST_Modeler.generate_asymmetric_fairing(top_round_side_flat, num_sections=160))
+
+        self.assertNotAlmostEqual(result_a["Swet"], result_b["Swet"], places=6)
+        self.assertNotAlmostEqual(result_a["Cd"], result_b["Cd"], places=6)
 
     def test_run_one_case_wrapper_matches_shared_evaluator(self):
         wrapped = evaluate_gene(

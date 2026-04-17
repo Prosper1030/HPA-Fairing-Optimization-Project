@@ -61,10 +61,13 @@ class FairingDragProxy:
         self.q = 0.5 * self.rho * (self.velocity ** 2)
 
     @staticmethod
-    def _section_exponents(curves: dict) -> tuple[float, float]:
-        top_exp = 0.5 * (float(curves.get("M_top", 2.5)) + float(curves.get("N_top", 2.5)))
-        bot_exp = 0.5 * (float(curves.get("M_bot", 2.5)) + float(curves.get("N_bot", 2.5)))
-        return max(top_exp, 1.2), max(bot_exp, 1.2)
+    def _section_exponents(curves: dict) -> tuple[float, float, float, float]:
+        return (
+            max(float(curves.get("M_top", 2.5)), 1.2),
+            max(float(curves.get("N_top", 2.5)), 1.2),
+            max(float(curves.get("M_bot", 2.5)), 1.2),
+            max(float(curves.get("N_bot", 2.5)), 1.2),
+        )
 
     @staticmethod
     def _build_section_points(
@@ -72,8 +75,10 @@ class FairingDragProxy:
         width_half: float,
         total_height: float,
         z_center: float,
-        top_exp: float,
-        bot_exp: float,
+        top_y_exp: float,
+        top_z_exp: float,
+        bot_y_exp: float,
+        bot_z_exp: float,
         n_points: int,
     ) -> np.ndarray:
         if width_half <= 1e-9 or total_height <= 1e-9:
@@ -91,13 +96,12 @@ class FairingDragProxy:
             # Use the upper-half exponent on the nose-top side and the
             # lower-half exponent on the underside. This keeps the proxy
             # aligned with how the current geometry exposes shape control.
-            exp_use = top_exp if 0.0 <= theta <= pi else bot_exp
-            y_value = width_half * np.sign(cos_val) * (abs(cos_val) ** (2.0 / exp_use))
-
             if 0.0 <= theta <= pi:
-                z_local = half_height * (abs(sin_val) ** (2.0 / top_exp))
+                y_value = width_half * np.sign(cos_val) * (abs(cos_val) ** (2.0 / top_y_exp))
+                z_local = half_height * (abs(sin_val) ** (2.0 / top_z_exp))
             else:
-                z_local = -half_height * (abs(sin_val) ** (2.0 / bot_exp))
+                y_value = width_half * np.sign(cos_val) * (abs(cos_val) ** (2.0 / bot_y_exp))
+                z_local = -half_height * (abs(sin_val) ** (2.0 / bot_z_exp))
 
             points[idx] = [x_value, y_value, z_center + z_local]
 
@@ -170,7 +174,7 @@ class FairingDragProxy:
         z_lower = np.asarray(curves["z_lower"], dtype=float)
         body_length = float(curves["L"])
 
-        top_exp, bot_exp = self._section_exponents(curves)
+        top_y_exp, top_z_exp, bot_y_exp, bot_z_exp = self._section_exponents(curves)
 
         section_points = [
             self._build_section_points(
@@ -178,8 +182,10 @@ class FairingDragProxy:
                 width_half[i],
                 total_height[i],
                 z_center[i],
-                top_exp,
-                bot_exp,
+                top_y_exp,
+                top_z_exp,
+                bot_y_exp,
+                bot_z_exp,
                 profile_points,
             )
             for i in range(len(x_coords))
@@ -367,5 +373,5 @@ class FairingDragProxy:
                 "recovery_curvature": float(metrics.recovery_curvature),
                 "pressure_risk": float(pressure_risk),
             },
-            "Model": "fast_drag_proxy_v3",
+            "Model": "fast_drag_proxy_v4",
         }

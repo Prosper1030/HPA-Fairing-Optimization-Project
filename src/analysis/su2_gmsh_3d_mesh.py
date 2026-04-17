@@ -86,10 +86,13 @@ def _resample_array(x_coords: np.ndarray, values: np.ndarray, sample_x: np.ndarr
     return np.interp(sample_x, x_coords, values)
 
 
-def _section_exponents(curves: dict) -> tuple[float, float]:
-    top_exp = 0.5 * (float(curves.get("M_top", 2.5)) + float(curves.get("N_top", 2.5)))
-    bot_exp = 0.5 * (float(curves.get("M_bot", 2.5)) + float(curves.get("N_bot", 2.5)))
-    return max(top_exp, 1.2), max(bot_exp, 1.2)
+def _section_exponents(curves: dict) -> tuple[float, float, float, float]:
+    return (
+        max(float(curves.get("M_top", 2.5)), 1.2),
+        max(float(curves.get("N_top", 2.5)), 1.2),
+        max(float(curves.get("M_bot", 2.5)), 1.2),
+        max(float(curves.get("N_bot", 2.5)), 1.2),
+    )
 
 
 def _section_profile(
@@ -97,8 +100,10 @@ def _section_profile(
     width_half: float,
     z_upper: float,
     z_lower: float,
-    top_exp: float,
-    bot_exp: float,
+    top_y_exp: float,
+    top_z_exp: float,
+    bot_y_exp: float,
+    bot_z_exp: float,
     section_points: int,
     length: float,
     min_section_scale: float,
@@ -114,13 +119,12 @@ def _section_profile(
         cos_val = np.cos(theta)
         sin_val = np.sin(theta)
 
-        exponent = top_exp if 0.0 <= theta <= np.pi else bot_exp
-        y_value = y_half * np.sign(cos_val) * (abs(cos_val) ** (2.0 / exponent))
-
         if 0.0 <= theta <= np.pi:
-            z_local = half_height * (abs(sin_val) ** (2.0 / top_exp))
+            y_value = y_half * np.sign(cos_val) * (abs(cos_val) ** (2.0 / top_y_exp))
+            z_local = half_height * (abs(sin_val) ** (2.0 / top_z_exp))
         else:
-            z_local = -half_height * (abs(sin_val) ** (2.0 / bot_exp))
+            y_value = y_half * np.sign(cos_val) * (abs(cos_val) ** (2.0 / bot_y_exp))
+            z_local = -half_height * (abs(sin_val) ** (2.0 / bot_z_exp))
 
         points.append((float(x_value), float(y_value), float(z_center + z_local)))
     return points
@@ -148,7 +152,7 @@ def _section_profiles(curves: dict, options: dict) -> list[list[tuple[float, flo
     sampled_width = _resample_array(x_coords, width_half, sample_x)
     sampled_upper = _resample_array(x_coords, z_upper, sample_x)
     sampled_lower = _resample_array(x_coords, z_lower, sample_x)
-    top_exp, bot_exp = _section_exponents(curves)
+    top_y_exp, top_z_exp, bot_y_exp, bot_z_exp = _section_exponents(curves)
 
     profiles: list[list[tuple[float, float, float]]] = []
     for x_value, width_value, upper_value, lower_value in zip(sample_x, sampled_width, sampled_upper, sampled_lower):
@@ -158,8 +162,10 @@ def _section_profiles(curves: dict, options: dict) -> list[list[tuple[float, flo
                 float(width_value),
                 float(upper_value),
                 float(lower_value),
-                top_exp,
-                bot_exp,
+                top_y_exp,
+                top_z_exp,
+                bot_y_exp,
+                bot_z_exp,
                 int(options["section_points"]),
                 length,
                 min_section_scale,

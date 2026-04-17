@@ -146,6 +146,161 @@ class CST_Modeler:
     """CST 幾何建模器，支援上下非對稱"""
 
     @staticmethod
+    def _normalized_parameter(value: float, lower: float, upper: float) -> float:
+        if upper <= lower:
+            return 0.5
+        return float(np.clip((float(value) - lower) / (upper - lower), 0.0, 1.0))
+
+    @staticmethod
+    def _clip_peak_position(value: float) -> float:
+        return float(np.clip(float(value), 0.15, 0.85))
+
+    @staticmethod
+    def _bezier_cubic(u: np.ndarray, p0: float, p1: float, p2: float, p3: float) -> np.ndarray:
+        one_minus_u = 1.0 - u
+        return (
+            (one_minus_u ** 3) * p0
+            + 3.0 * (one_minus_u ** 2) * u * p1
+            + 3.0 * one_minus_u * (u ** 2) * p2
+            + (u ** 3) * p3
+        )
+
+    @staticmethod
+    def _piecewise_bezier_curve(
+        psi: np.ndarray,
+        split_position: float,
+        start_value: float,
+        split_value: float,
+        end_value: float,
+        left_ctrl: tuple[float, float],
+        right_ctrl: tuple[float, float],
+    ) -> np.ndarray:
+        """
+        用兩段三次 Bezier 組成一條在 split station 具有明確幾何語義的縱向曲線。
+
+        這個 helper 讓 peak station / tail endpoint 都直接由參數定義，
+        不再依賴 legacy 的 remap + discrete normalization。
+        """
+        split = float(np.clip(split_position, 1e-3, 1.0 - 1e-3))
+        curve = np.zeros_like(psi, dtype=float)
+
+        left_mask = psi <= split
+        if np.any(left_mask):
+            u_left = np.clip(psi[left_mask] / split, 0.0, 1.0)
+            curve[left_mask] = CST_Modeler._bezier_cubic(
+                u_left,
+                float(start_value),
+                float(left_ctrl[0]),
+                float(left_ctrl[1]),
+                float(split_value),
+            )
+
+        right_mask = ~left_mask
+        if np.any(right_mask):
+            u_right = np.clip((psi[right_mask] - split) / (1.0 - split), 0.0, 1.0)
+            curve[right_mask] = CST_Modeler._bezier_cubic(
+                u_right,
+                float(split_value),
+                float(right_ctrl[0]),
+                float(right_ctrl[1]),
+                float(end_value),
+            )
+
+        return curve
+
+    @staticmethod
+    def _build_width_curve(psi: np.ndarray, gene: Dict, peak_position: float) -> np.ndarray:
+        width_peak = max(float(gene['W_max']) * 0.5, 1e-6)
+
+        w0_n = CST_Modeler._normalized_parameter(gene.get('w0', 0.25), 0.15, 0.35)
+        w1_n = CST_Modeler._normalized_parameter(gene.get('w1', 0.35), 0.25, 0.45)
+        w2_n = CST_Modeler._normalized_parameter(gene.get('w2', 0.30), 0.20, 0.40)
+        w3_n = CST_Modeler._normalized_parameter(gene.get('w3', 0.10), 0.05, 0.20)
+
+        left_1 = width_peak * (0.08 + 0.28 * w0_n)
+        left_2 = width_peak * min(0.92, max((left_1 / width_peak) + 0.10, 0.50 + 0.28 * w1_n))
+        right_2 = width_peak * (0.03 + 0.35 * w3_n)
+        right_1 = width_peak * min(0.95, max((right_2 / width_peak) + 0.18, 0.48 + 0.34 * w2_n))
+
+        return CST_Modeler._piecewise_bezier_curve(
+            psi,
+            peak_position,
+            0.0,
+            width_peak,
+            0.0,
+            (left_1, left_2),
+            (right_1, right_2),
+        )
+
+    @staticmethod
+    def _build_thickness_curve(psi: np.ndarray, gene: Dict, peak_position: float) -> np.ndarray:
+        thickness_peak = max(float(gene['H_top_max']) + float(gene['H_bot_max']), 1e-6)
+
+        n1_n = CST_Modeler._normalized_parameter(gene['N1'], 0.4, 0.9)
+        n2_avg = 0.5 * (float(gene['N2_top']) + float(gene['N2_bot']))
+        n2_avg_n = CST_Modeler._normalized_parameter(n2_avg, 0.5, 1.0)
+
+        nose_bluntness = 1.0 - n1_n
+        tail_fullness = 1.0 - n2_avg_n
+
+        left_1 = thickness_peak * (0.12 + 0.30 * nose_bluntness)
+        left_2 = thickness_peak * min(0.94, max((left_1 / thickness_peak) + 0.12, 0.56 + 0.24 * nose_bluntness))
+        right_2 = thickness_peak * (0.02 + 0.30 * tail_fullness)
+        right_1 = thickness_peak * min(0.95, max((right_2 / thickness_peak) + 0.18, 0.46 + 0.32 * tail_fullness))
+
+        return CST_Modeler._piecewise_bezier_curve(
+            psi,
+            peak_position,
+            0.0,
+            thickness_peak,
+            0.0,
+            (left_1, left_2),
+            (right_1, right_2),
+        )
+
+    @staticmethod
+    def _build_centerline_curve(
+        psi: np.ndarray,
+        gene: Dict,
+        peak_position: float,
+        thickness_curve: np.ndarray,
+    ) -> np.ndarray:
+        top_peak = float(gene['H_top_max'])
+        bot_peak = float(gene['H_bot_max'])
+        peak_center = 0.5 * (top_peak - bot_peak)
+        tail_rise = float(gene.get('tail_rise', 0.10))
+
+        tail_start = float(np.clip(gene.get('blend_start', 0.75), peak_position + 0.05, 0.97))
+        tail_hold = (tail_start - peak_position) / max(1.0 - peak_position, 1e-9)
+        power_n = CST_Modeler._normalized_parameter(gene.get('blend_power', 2.0), 1.5, 3.0)
+        tail_balance = float(np.clip((float(gene['N2_bot']) - float(gene['N2_top'])) / 0.5, -1.0, 1.0))
+
+        peak_half_thickness = max(0.5 * float(np.max(thickness_curve)), 1e-6)
+        asymmetry = abs(peak_center) / peak_half_thickness
+
+        left_1 = peak_center * (0.18 + 0.18 * asymmetry)
+        left_2 = peak_center * (0.72 + 0.10 * asymmetry)
+
+        progress_1 = float(np.clip(0.14 + 0.26 * (1.0 - tail_hold) + 0.10 * (1.0 - power_n), 0.05, 0.60))
+        progress_2 = float(np.clip(0.62 + 0.18 * (1.0 - tail_hold) + 0.08 * (1.0 - power_n), 0.40, 0.95))
+        bias = 0.08 * tail_balance * float(np.max(thickness_curve))
+        zc_min = min(peak_center, tail_rise) - 0.20 * float(np.max(thickness_curve))
+        zc_max = max(peak_center, tail_rise) + 0.20 * float(np.max(thickness_curve))
+
+        right_1 = float(np.clip(peak_center + progress_1 * (tail_rise - peak_center) + 0.5 * bias, zc_min, zc_max))
+        right_2 = float(np.clip(peak_center + progress_2 * (tail_rise - peak_center) + 0.2 * bias, zc_min, zc_max))
+
+        return CST_Modeler._piecewise_bezier_curve(
+            psi,
+            peak_position,
+            0.0,
+            peak_center,
+            tail_rise,
+            (left_1, left_2),
+            (right_1, right_2),
+        )
+
+    @staticmethod
     def _warp_psi_to_peak_position(
         psi: np.ndarray,
         target_peak_position: float | None,
@@ -255,131 +410,41 @@ class CST_Modeler:
         - blend_power: 混合曲線冪次（可選）
         - w0, w1, w2, w3: CST權重（可選）
         """
-        # CST權重（從基因或使用預設值）
+        # 保留 legacy 欄位供下游分析與 JSON 相容，但真正的幾何主幹
+        # 已改成 w(x) / H(x) / z_c(x) 三條縱向曲線。
         w0 = gene.get('w0', 0.25)
         w1 = gene.get('w1', 0.35)
         w2 = gene.get('w2', 0.30)
         w3 = gene.get('w3', 0.10)
-        weights = np.array([w0, w1, w2, w3])
+        weights = np.array([w0, w1, w2, w3], dtype=float)
 
         # 生成截面位置 - 使用餘弦分布（機頭機尾密集）
         psi_list = SectionDistribution.cosine_full(num_sections, min_spacing=0.001)
-        psi = np.array(psi_list)
+        psi = np.array(psi_list, dtype=float)
+        x_max_pos = CST_Modeler._clip_peak_position(gene.get('X_max_pos', 0.25))
+        if not np.any(np.isclose(psi, x_max_pos, atol=1e-9)):
+            psi = np.sort(np.append(psi, x_max_pos))
         x = psi * gene['L']
 
-        # 生成半寬度曲線（W_max 是全寬，需除以 2）
-        # 使用平均 N2 來控制寬度曲線
         N2_avg = (gene['N2_top'] + gene['N2_bot']) / 2.0
-        x_max_pos = float(gene.get('X_max_pos', 0.25))
-        width_half = CST_Modeler.cst_curve(
-            psi,
-            gene['W_max'] / 2.0,
-            gene['N1'],
-            N2_avg,
-            weights,
-            peak_position=x_max_pos,
-        )
+        width_half = CST_Modeler._build_width_curve(psi, gene, x_max_pos)
+        super_height = CST_Modeler._build_thickness_curve(psi, gene, x_max_pos)
+        z_loc = CST_Modeler._build_centerline_curve(psi, gene, x_max_pos, super_height)
 
-        # ==========================================
-        # 上下邊界獨立反推法（混合法）
-        # ==========================================
+        z_upper = z_loc + 0.5 * super_height
+        z_lower = z_loc - 0.5 * super_height
 
-        # 尾部參數（從基因或使用預設值）
-        tail_rise = gene.get('tail_rise', 0.10)    # 機尾上升高度 (m)
-        blend_start = gene.get('blend_start', 0.75)  # 混合開始位置
-        blend_power = gene.get('blend_power', 2.0)   # 混合曲線冪次
+        # 用解析端點條件硬鎖 nose / tail，避免浮點誤差污染閉合。
+        z_upper[0] = 0.0
+        z_lower[0] = 0.0
+        z_loc[0] = 0.0
+        super_height[0] = 0.0
 
-        # 1. 生成基礎CST曲線
-        z_upper_cst = CST_Modeler.cst_curve(
-            psi,
-            gene['H_top_max'],
-            gene['N1'],
-            gene['N2_top'],
-            weights,
-            peak_position=x_max_pos,
-        )
-        z_lower_cst = -CST_Modeler.cst_curve(
-            psi,
-            gene['H_bot_max'],
-            gene['N1'],
-            gene['N2_bot'],
-            weights,
-            peak_position=x_max_pos,
-        )
-
-        # 2. 計算混合因子
-        blend_factor = np.zeros_like(psi)
-        mask = psi >= blend_start
-        if np.any(mask):
-            psi_blend = (psi[mask] - blend_start) / (1.0 - blend_start)
-            blend_factor[mask] = psi_blend**blend_power
-
-        # 3. 混合到機尾高度（確保單調收斂，避免拐點）
-        # 策略：在曲線接近 tail_rise 之前就開始線性插值
-        z_upper_target = z_upper_cst * (1 - blend_factor) + tail_rise * blend_factor
-        z_lower_target = z_lower_cst * (1 - blend_factor) + tail_rise * blend_factor
-
-        z_upper = np.copy(z_upper_target)
-        z_lower = np.copy(z_lower_target)
-
-        if np.any(mask):
-            blend_indices = np.where(mask)[0]
-
-            # ⚠️ 關鍵修復：找到曲線接近 tail_rise 的點，從那裡開始線性插值
-            # 避免曲線降到 tail_rise 以下再上升（造成拐點）
-
-            # 上曲線：找第一個降到接近 tail_rise 的點（給 10% 容差）
-            linear_start_idx_upper = None
-            tolerance = tail_rise * 1.10  # tail_rise + 10%
-
-            for i, idx in enumerate(blend_indices):
-                if z_upper[idx] <= tolerance:
-                    linear_start_idx_upper = i
-                    break
-
-            # 如果找到了，從該點開始強制線性插值到 tail_rise
-            if linear_start_idx_upper is not None:
-                start_idx = blend_indices[linear_start_idx_upper]
-                start_z = z_upper[start_idx]
-                start_psi = psi[start_idx]
-
-                # 確保起點不低於 tail_rise（避免上升）
-                if start_z < tail_rise:
-                    start_z = tail_rise
-
-                for i in range(linear_start_idx_upper, len(blend_indices)):
-                    idx = blend_indices[i]
-                    # 線性插值（如果起點 = tail_rise，則全程保持 tail_rise）
-                    t = (psi[idx] - start_psi) / (1.0 - start_psi) if start_psi < 1.0 else 1.0
-                    z_upper[idx] = start_z + (tail_rise - start_z) * t
-
-            # 下曲線：找第一個上升到接近 tail_rise 的點
-            linear_start_idx_lower = None
-            tolerance_lower = tail_rise * 0.90  # tail_rise - 10%
-
-            for i, idx in enumerate(blend_indices):
-                if z_lower[idx] >= tolerance_lower:
-                    linear_start_idx_lower = i
-                    break
-
-            # 從該點開始強制線性插值到 tail_rise
-            if linear_start_idx_lower is not None:
-                start_idx = blend_indices[linear_start_idx_lower]
-                start_z = z_lower[start_idx]
-                start_psi = psi[start_idx]
-
-                # 確保起點不高於 tail_rise（避免下降）
-                if start_z > tail_rise:
-                    start_z = tail_rise
-
-                for i in range(linear_start_idx_lower, len(blend_indices)):
-                    idx = blend_indices[i]
-                    t = (psi[idx] - start_psi) / (1.0 - start_psi) if start_psi < 1.0 else 1.0
-                    z_lower[idx] = start_z + (tail_rise - start_z) * t
-
-        # 4. 反推VSP參數
-        super_height = z_upper - z_lower  # 總厚度
-        z_loc = (z_upper + z_lower) / 2   # 幾何中心
+        tail_rise = float(gene.get('tail_rise', 0.10))
+        z_upper[-1] = tail_rise
+        z_lower[-1] = tail_rise
+        z_loc[-1] = tail_rise
+        super_height[-1] = 0.0
 
         return {
             'L': gene['L'],
@@ -403,6 +468,7 @@ class CST_Modeler:
             'N_bot': gene.get('N_bot', 2.5),
             # CST權重（用於切線計算）
             'weights': weights.tolist(),
+            'parameterization': 'whzc_bezier_v2',
             # 保留舊格式以便兼容（可選）
             'top': z_upper,
             'bottom': z_lower,
@@ -410,7 +476,9 @@ class CST_Modeler:
 
     @staticmethod
     def generate_super_ellipse_profile(y_half: float, z_top: float, z_bot: float,
-                                       n_points: int = 50, exponent: float = 2.5) -> List:
+                                       n_points: int = 50, exponent: float = 2.5,
+                                       m_top: float | None = None, n_top: float | None = None,
+                                       m_bot: float | None = None, n_bot: float | None = None) -> List:
         """
         生成上下非對稱的超橢圓截面輪廓（用於 VSP File XSec）
 
@@ -432,23 +500,29 @@ class CST_Modeler:
         points = []
 
         # 生成 n_points + 1 個點，確保最後一點 = 第一點（閉合曲線）
+        top_y_exp = max(float(m_top if m_top is not None else exponent), 1.2)
+        top_z_exp = max(float(n_top if n_top is not None else exponent), 1.2)
+        bot_y_exp = max(float(m_bot if m_bot is not None else exponent), 1.2)
+        bot_z_exp = max(float(n_bot if n_bot is not None else exponent), 1.2)
+
         for i in range(n_points + 1):
             # 從右邊開始逆時針（0° → 360°）
             theta = 2 * np.pi * i / n_points
 
             # 計算 y（左右對稱）
             cos_val = np.cos(theta)
-            y = y_half * np.sign(cos_val) * (np.abs(cos_val) ** (2.0 / exponent))
 
             # 計算 z（上下不同）
             sin_val = np.sin(theta)
 
             if 0 <= theta <= np.pi:
                 # 上半部（θ ∈ [0, π]）：用 z_top
-                z = z_top * (np.abs(sin_val) ** (2.0 / exponent))
+                y = y_half * np.sign(cos_val) * (np.abs(cos_val) ** (2.0 / top_y_exp))
+                z = z_top * (np.abs(sin_val) ** (2.0 / top_z_exp))
             else:
                 # 下半部（θ ∈ [π, 2π]）：用 z_bot（負值）
-                z = -z_bot * (np.abs(sin_val) ** (2.0 / exponent))
+                y = y_half * np.sign(cos_val) * (np.abs(cos_val) ** (2.0 / bot_y_exp))
+                z = -z_bot * (np.abs(sin_val) ** (2.0 / bot_z_exp))
 
             # VSP XSec 是局部座標，x=0（垂直於機身軸）
             points.append([0.0, y, z])
@@ -457,7 +531,9 @@ class CST_Modeler:
 
     @staticmethod
     def write_fxs_file(filepath: str, y_half: float, z_top: float, z_bot: float,
-                       n_points: int = 60, exponent: float = 2.5) -> bool:
+                       n_points: int = 60, exponent: float = 2.5,
+                       m_top: float | None = None, n_top: float | None = None,
+                       m_bot: float | None = None, n_bot: float | None = None) -> bool:
         """
         生成並寫入 VSP .fxs 檔案（上下非對稱超橢圓截面）
 
@@ -477,7 +553,7 @@ class CST_Modeler:
         try:
             # 生成超橢圓截面點
             profile_points = CST_Modeler.generate_super_ellipse_profile(
-                y_half, z_top, z_bot, n_points, exponent
+                y_half, z_top, z_bot, n_points, exponent, m_top, n_top, m_bot, n_bot
             )
 
             # 寫入 .fxs 檔案
@@ -666,37 +742,20 @@ class VSPModelGenerator:
                 if n_bot_parm:
                     vsp.SetParmVal(n_bot_parm, n_bot)
 
-                # 計算並設置切線角度（上下分開計算）
-                # 使用curves中的權重（如果有），否則使用預設值
-                weights_fixed = curves.get('weights', [0.25, 0.35, 0.30, 0.10])
-
-                # 獲取實際的 N2 值（從 curves 中）
-                N1 = curves.get('N1', 0.5)
-                N2_top = curves.get('N2_top', 0.7)  # 上曲線N2
-                N2_bot = curves.get('N2_bot', 0.8)  # 下曲線N2
-                N2_avg = curves.get('N2_avg', 0.75) # 平均N2（用於左右）
-
-                # ⚠️ 新方法：直接從z_upper和z_lower曲線計算角度
-                # 這樣能正確反映非對稱幾何的真實斜率
-                asymmetric_angles = CSTDerivatives.compute_asymmetric_tangent_angles(
-                    curves['x'], curves['z_upper'], curves['z_lower'], i
-                )
-                angle_top_use = asymmetric_angles['top']
-                angle_bot_use = asymmetric_angles['bottom']
-
-                # 左右對稱，使用平均值（寬度方向）
-                tangent_lr = CSTDerivatives.compute_tangent_angles_for_section(
-                    psi, N1, N2_avg, weights_fixed, weights_fixed, curves['L']
+                # 直接從實際離散曲線計算四向切線，避免 legacy CST 導數
+                # 與新 w/H/z_c 參數化互相打架。
+                tangent_angles = CSTDerivatives.compute_tangent_angles_for_curves(
+                    curves['x'], curves['width_half'], curves['z_upper'], curves['z_lower'], i
                 )
 
                 # 設置切線
                 vsp.SetXSecContinuity(xsec, 1)  # C1 連續性
                 vsp.SetXSecTanAngles(
                     xsec, vsp.XSEC_BOTH_SIDES,
-                    angle_top_use,           # 上（對稱時使用平均）
-                    tangent_lr['right'],     # 右（左右對稱）
-                    angle_bot_use,           # 下（對稱時使用平均）
-                    tangent_lr['left']       # 左（左右對稱）
+                    tangent_angles['top'],
+                    tangent_angles['right'],
+                    tangent_angles['bottom'],
+                    tangent_angles['left']
                 )
 
                 # 根據位置調整Strength以改善平滑度
@@ -713,21 +772,17 @@ class VSPModelGenerator:
             else:
                 # 機頭/機尾特殊處理
                 if i == 0:
-                    # 機頭切線 - 使用新的非對稱角度計算法
-                    # 即使機頭是對稱的，仍使用新方法以保持一致性
-                    nose_angles = CSTDerivatives.compute_asymmetric_tangent_angles(
-                        curves['x'], curves['z_upper'], curves['z_lower'], i
+                    nose_angles = CSTDerivatives.compute_tangent_angles_for_curves(
+                        curves['x'], curves['width_half'], curves['z_upper'], curves['z_lower'], i
                     )
-                    # 機頭左右對稱，使用相同的角度
-                    angle_lr = nose_angles['top']  # 左右使用上角度作為參考
 
                     vsp.SetXSecContinuity(xsec, 1)
                     vsp.SetXSecTanAngles(
                         xsec, vsp.XSEC_BOTH_SIDES,
-                        nose_angles['top'],      # 上
-                        angle_lr,                # 右
-                        nose_angles['bottom'],   # 下（已包含正負號修正）
-                        angle_lr                 # 左
+                        nose_angles['top'],
+                        nose_angles['right'],
+                        nose_angles['bottom'],
+                        nose_angles['left']
                     )
                     vsp.SetXSecTanStrengths(xsec, vsp.XSEC_BOTH_SIDES, 0.75, 0.75, 0.75, 0.75)
                     vsp.SetXSecTanSlews(xsec, vsp.XSEC_BOTH_SIDES, 0.0, 0.0, 0.0, 0.0)

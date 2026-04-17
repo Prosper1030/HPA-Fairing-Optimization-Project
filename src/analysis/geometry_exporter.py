@@ -40,10 +40,13 @@ def _require_float_array(curves: dict, key: str) -> np.ndarray:
     return np.asarray(curves[key], dtype=float)
 
 
-def _section_exponents(curves: dict) -> tuple[float, float]:
-    top_exp = 0.5 * (float(curves.get("M_top", 2.5)) + float(curves.get("N_top", 2.5)))
-    bot_exp = 0.5 * (float(curves.get("M_bot", 2.5)) + float(curves.get("N_bot", 2.5)))
-    return max(top_exp, 1.2), max(bot_exp, 1.2)
+def _section_exponents(curves: dict) -> tuple[float, float, float, float]:
+    return (
+        max(float(curves.get("M_top", 2.5)), 1.2),
+        max(float(curves.get("N_top", 2.5)), 1.2),
+        max(float(curves.get("M_bot", 2.5)), 1.2),
+        max(float(curves.get("N_bot", 2.5)), 1.2),
+    )
 
 
 def _section_profile(
@@ -51,8 +54,10 @@ def _section_profile(
     width_half: float,
     z_upper: float,
     z_lower: float,
-    top_exp: float,
-    bot_exp: float,
+    top_y_exp: float,
+    top_z_exp: float,
+    bot_y_exp: float,
+    bot_z_exp: float,
     section_points: int,
     min_section_scale: float,
 ) -> list[tuple[float, float, float]]:
@@ -66,13 +71,12 @@ def _section_profile(
         theta = (2.0 * math.pi * index) / section_points
         cos_val = math.cos(theta)
         sin_val = math.sin(theta)
-        exponent = top_exp if 0.0 <= theta <= math.pi else bot_exp
-        y_value = y_half * math.copysign(abs(cos_val) ** (2.0 / exponent), cos_val)
-
         if 0.0 <= theta <= math.pi:
-            z_local = half_height * (abs(sin_val) ** (2.0 / top_exp))
+            y_value = y_half * math.copysign(abs(cos_val) ** (2.0 / top_y_exp), cos_val)
+            z_local = half_height * (abs(sin_val) ** (2.0 / top_z_exp))
         else:
-            z_local = -half_height * (abs(sin_val) ** (2.0 / bot_exp))
+            y_value = y_half * math.copysign(abs(cos_val) ** (2.0 / bot_y_exp), cos_val)
+            z_local = -half_height * (abs(sin_val) ** (2.0 / bot_z_exp))
 
         profile.append((float(x_value), float(y_value), float(z_center + z_local)))
     return profile
@@ -99,7 +103,7 @@ def _build_surface_mesh(
     section_count = max(int(section_count), 2)
     section_points = max(int(section_points), 8)
 
-    top_exp, bot_exp = _section_exponents(curves)
+    top_y_exp, top_z_exp, bot_y_exp, bot_z_exp = _section_exponents(curves)
     sample_x = np.linspace(float(x_coords[0]), float(x_coords[-1]), section_count)
     sampled_width = np.interp(sample_x, x_coords, width_half)
     sampled_upper = np.interp(sample_x, x_coords, z_upper)
@@ -119,8 +123,10 @@ def _build_surface_mesh(
             float(value_w),
             float(value_u),
             float(value_l),
-            top_exp,
-            bot_exp,
+            top_y_exp,
+            top_z_exp,
+            bot_y_exp,
+            bot_z_exp,
             section_points,
             min_section_scale,
         ):
