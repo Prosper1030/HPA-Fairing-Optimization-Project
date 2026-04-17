@@ -175,6 +175,9 @@ python scripts/run_ga.py --gen 50 --pop 20
 
 # 明確指定 analysis mode
 python scripts/run_ga.py --analysis-mode proxy
+
+# 一鍵把 GA 結果整理成 SU2 shortlist 工作包
+python scripts/run_ga.py --prepare-su2-shortlist --su2-shortlist-top 5
 ```
 
 GA 的預設行為：
@@ -182,7 +185,14 @@ GA 的預設行為：
 - 適應度主路徑使用 `proxy`
 - 保存 `best_gene.json`
 - 另外保存 `results.json`，包含最佳解的純空力摘要
+- 會持續記錄每個已評估候選到 `logs/candidate_scores.jsonl`
 - 最終 `.vsp3` 匯出預設關閉
+
+如果你加上 `--prepare-su2-shortlist`，GA 完成後還會自動：
+
+- 從已評估候選中挑出前 `N` 名有效設計
+- 在 `<run_dir>/su2_shortlist` 產生 SU2 驗證工作包
+- 在 `results.json` 補上 `su2_shortlist` 輸出摘要
 
 如果你真的需要最佳解的 `.vsp3`：
 
@@ -258,6 +268,11 @@ python scripts/prepare_su2_shortlist.py \
   --batch-summary output/analysis/batch_demo/batch_summary.json \
   --top 3 \
   --out output/su2_shortlist/demo
+
+# 或者直接在 GA 結束後一鍵產生
+python scripts/run_ga.py \
+  --prepare-su2-shortlist \
+  --su2-shortlist-top 5
 
 # 直接用單一 gene 準備工作包
 python scripts/prepare_su2_shortlist.py \
