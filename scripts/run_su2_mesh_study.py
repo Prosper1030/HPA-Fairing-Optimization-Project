@@ -299,6 +299,27 @@ def _delta_percent(current: float | None, previous: float | None) -> float | Non
     return (current / previous - 1.0) * 100.0
 
 
+def _summarize_selection_coverage(cases: list[dict]) -> dict:
+    coverage = {tag: 0 for tag in REPRESENTATIVE_TAG_PRIORITY}
+    reasons: dict[str, int] = {}
+
+    for case in cases:
+        for tag in case.get("RepresentativeTags", []):
+            coverage[tag] = coverage.get(tag, 0) + 1
+        reason = case.get("RepresentativeSelectionReason")
+        if reason:
+            reasons[reason] = reasons.get(reason, 0) + 1
+
+    covered_tags = [tag for tag, count in coverage.items() if count > 0]
+    missing_tags = [tag for tag in REPRESENTATIVE_TAG_PRIORITY if coverage.get(tag, 0) == 0]
+    return {
+        "TagCounts": coverage,
+        "CoveredTags": covered_tags,
+        "MissingTags": missing_tags,
+        "SelectionReasonCounts": reasons,
+    }
+
+
 def _summarize_reference_readiness(profile_results: list[dict]) -> dict:
     profile_map = {entry["Profile"]: entry for entry in profile_results}
     fine_name, finer_name = REFERENCE_READY_POLICY["required_profiles"]
@@ -408,6 +429,9 @@ def _build_case_summary(
         "Profiles": profile_results,
         "ProxyBaseline": proxy_baseline,
         "RecommendedReferenceProfile": recommended_profile,
+        "SourceNotes": candidate.get("Notes", {}),
+        "RepresentativeTags": list(candidate.get("Notes", {}).get("representative_tags", [])),
+        "RepresentativeSelectionReason": candidate.get("Notes", {}).get("representative_selection_reason"),
     }
     summary["ReferenceAssessment"] = _summarize_reference_readiness(profile_results)
     return summary
@@ -437,6 +461,7 @@ def _build_study_summary(
         "ReferenceReadyCases": ready_cases,
         "NotReferenceReadyCases": not_ready_cases,
     }
+    summary["SelectionCoverage"] = _summarize_selection_coverage(cases)
     if len(cases) == 1:
         summary.update(cases[0])
     return summary
@@ -449,6 +474,10 @@ def _build_case_markdown(summary: dict) -> list[str]:
         f"- SourceGene: {summary.get('SourceGene') or 'inline'}",
         f"- ReferenceStatus: {summary['ReferenceAssessment']['ReferenceStatus']}",
     ]
+    if summary.get("RepresentativeTags"):
+        lines.append(f"- RepresentativeTags: {', '.join(summary['RepresentativeTags'])}")
+    if summary.get("RepresentativeSelectionReason"):
+        lines.append(f"- RepresentativeSelectionReason: {summary['RepresentativeSelectionReason']}")
 
     proxy = summary.get("ProxyBaseline")
     if proxy:
@@ -521,9 +550,24 @@ def _build_study_markdown(summary: dict) -> str:
         f"- RequestedProfiles: {', '.join(summary['RequestedProfiles'])}",
         f"- RequiredProfilesForReferenceReady: {', '.join(summary['RequiredProfilesForReferenceReady'])}",
         "",
+        "## Selection Coverage",
+        "",
+        f"- CoveredTags: {', '.join(summary['SelectionCoverage']['CoveredTags']) or 'none'}",
+        f"- MissingTags: {', '.join(summary['SelectionCoverage']['MissingTags']) or 'none'}",
+        "",
+        "| Tag | CaseCount |",
+        "| --- | ---: |",
+    ]
+    for tag in REPRESENTATIVE_TAG_PRIORITY:
+        lines.append(f"| {tag} | {summary['SelectionCoverage']['TagCounts'].get(tag, 0)} |")
+
+    lines.extend(
+        [
+            "",
         "| Case | ReferenceStatus | RecommendedProfile | Fine->Finer ΔCd |",
         "| --- | --- | --- | ---: |",
-    ]
+        ]
+    )
     for case in summary["Cases"]:
         delta = case["ReferenceAssessment"].get("FineToFinerDeltaCdPercent")
         delta_text = "n/a" if delta is None else f"{delta:+.3f}%"

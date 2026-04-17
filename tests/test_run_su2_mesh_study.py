@@ -72,6 +72,36 @@ class TestRepresentativeSelection(unittest.TestCase):
             self.assertEqual([entry["name"] for entry in candidates], ["slender", "aft", "aggressive"])
             self.assertEqual(candidates[0]["Notes"]["representative_selection_reason"], "representative_tag:slender")
 
+    def test_build_study_summary_tracks_selection_coverage(self):
+        cases = [
+            {
+                "SourceCaseName": "slender_case",
+                "RepresentativeTags": ["slender"],
+                "RepresentativeSelectionReason": "representative_tag:slender",
+                "ReferenceAssessment": {"ReferenceReady": True, "ReferenceStatus": "ReferenceReady", "FineToFinerDeltaCdPercent": 1.0},
+            },
+            {
+                "SourceCaseName": "aft_case",
+                "RepresentativeTags": ["peak_aft", "tail_aggressive"],
+                "RepresentativeSelectionReason": "representative_tag:peak_aft",
+                "ReferenceAssessment": {"ReferenceReady": False, "ReferenceStatus": "NotReferenceReady", "FineToFinerDeltaCdPercent": None},
+            },
+        ]
+
+        summary = run_su2_mesh_study._build_study_summary(
+            cases=cases,
+            preset="hpa",
+            flow_path="/tmp/flow.json",
+            solver_command="SU2_CFD",
+            selected_profiles=["fine", "finer"],
+        )
+
+        self.assertEqual(summary["ReferenceReadyCaseCount"], 1)
+        self.assertEqual(summary["SelectionCoverage"]["TagCounts"]["slender"], 1)
+        self.assertEqual(summary["SelectionCoverage"]["TagCounts"]["peak_aft"], 1)
+        self.assertEqual(summary["SelectionCoverage"]["SelectionReasonCounts"]["representative_tag:slender"], 1)
+        self.assertIn("short_fat", summary["SelectionCoverage"]["MissingTags"])
+
 
 @unittest.skipUnless(GMSH_AVAILABLE, "gmsh not installed")
 class TestRunSU2MeshStudy(unittest.TestCase):

@@ -127,6 +127,7 @@ batch 模式會：
 - 每個案例都產生自己的 `summary.json` / `summary.md` / 圖檔
 - 在根目錄另外產生 `batch_summary.json` 與 `batch_summary.md`
 - 依 `Drag` 由小到大做排名，方便快速比較候選外形
+- 額外標記 `RepresentativeTags`，方便後續挑代表案例做 SU2 驗證
 
 如果 batch 目錄裡有些 gene 只寫了部分欄位，也可以一起補齊：
 
@@ -298,6 +299,21 @@ python scripts/run_su2_shortlist.py \
 python scripts/run_su2_shortlist.py \
   --shortlist-dir output/su2_shortlist/demo \
   --ranks 4
+
+# 直接從 batch summary 挑代表案例做 multi-case mesh study
+python scripts/run_su2_mesh_study.py \
+  --batch-summary output/analysis/batch_demo/batch_summary.json \
+  --representative-study \
+  --representative-limit 6 \
+  --out output/su2_mesh_study/demo
+
+# 如果只想跑特定 mesh profile
+python scripts/run_su2_mesh_study.py \
+  --batch-summary output/analysis/batch_demo/batch_summary.json \
+  --representative-study \
+  --profile fine \
+  --profile finer \
+  --out output/su2_mesh_study/demo
 ```
 
 這個流程會為每個 case 產生：
@@ -330,6 +346,19 @@ python scripts/run_su2_shortlist.py \
 - `su2_result.json` / `su2_result.md`：每個 case 的 SU2 結果
 - `su2_run_summary.json`
 - `su2_run_summary.md`
+
+如果你使用 `run_su2_mesh_study.py`，則會另外得到：
+
+- `mesh_study_summary.json`
+- `mesh_study_summary.md`
+- 每個 case 各 profile 的子資料夾
+
+`mesh_study_summary` 會整理：
+
+- 每個 case 的 `ReferenceReady / NotReferenceReady`
+- `fine -> finer` 的 `Cd` 變化
+- Cauchy / `CdSwingPercentLast10` 檢查
+- representative case selection coverage 與選取理由
 
 目前的範圍是「準備可重現的 SU2 驗證工作包」：
 
