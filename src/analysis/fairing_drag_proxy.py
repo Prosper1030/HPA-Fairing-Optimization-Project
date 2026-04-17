@@ -525,9 +525,10 @@ class FairingDragProxy:
         cf_mix = self.estimate_skin_friction_cf(metrics, laminar_fraction)
         form_factor = self.estimate_form_factor(metrics)
         cd_viscous = metrics.swet * cf_mix * form_factor / self.s_ref
-        cd_pressure, pressure_risk = self.estimate_pressure_cd(metrics, laminar_fraction)
+        cd_pressure, pressure_risk, transition_multiplier = self.estimate_pressure_cd(metrics, laminar_fraction)
         cd_total = cd_viscous + cd_pressure
         drag_force = self.q * cd_total * self.s_ref
+        model_name = f"fast_drag_proxy_{self.model_version}"
 
         return {
             "Cd": float(cd_total),
@@ -539,6 +540,7 @@ class FairingDragProxy:
             "FF": float(form_factor),
             "LaminarFraction": float(laminar_fraction),
             "TransitionFraction": float(laminar_fraction),
+            "TransitionTailMultiplier": float(transition_multiplier),
             "FinenessRatio": float(metrics.fineness_ratio),
             "XPeakAreaFrac": float(metrics.x_peak_area_frac),
             "TailAngles": {
@@ -554,5 +556,5 @@ class FairingDragProxy:
                 "recovery_curvature": float(metrics.recovery_curvature),
                 "pressure_risk": float(pressure_risk),
             },
-            "Model": "fast_drag_proxy_v5",
+            "Model": model_name,
         }

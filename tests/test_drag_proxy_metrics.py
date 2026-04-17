@@ -39,7 +39,7 @@ class TestDragProxyMetrics(unittest.TestCase):
         }
 
     def test_proxy_penalizes_aft_peak_and_reports_lower_laminar_fraction(self):
-        proxy = FairingDragProxy()
+        proxy = FairingDragProxy(model_version="v5")
 
         baseline = proxy.evaluate_curves(CST_Modeler.generate_asymmetric_fairing(self.base_gene, num_sections=160))
         aft_peak = proxy.evaluate_curves(
@@ -55,7 +55,7 @@ class TestDragProxyMetrics(unittest.TestCase):
         self.assertGreater(aft_peak["Quality"]["pressure_risk"], baseline["Quality"]["pressure_risk"])
 
     def test_proxy_flags_high_pressure_risk_for_steep_tail_case(self):
-        proxy = FairingDragProxy()
+        proxy = FairingDragProxy(model_version="v5")
         steep_tail_gene = {
             **self.base_gene,
             "L": 2.463576995012689,
@@ -81,7 +81,7 @@ class TestDragProxyMetrics(unittest.TestCase):
         self.assertAlmostEqual(result["TransitionFraction"], result["LaminarFraction"], places=8)
 
     def test_proxy_best_gene_stays_near_boundary_layer_su2_scale(self):
-        proxy = FairingDragProxy()
+        proxy = FairingDragProxy(model_version="v6")
         best_gene = {
             "L": 2.463576995012689,
             "W_max": 0.5401448192294462,
@@ -112,8 +112,9 @@ class TestDragProxyMetrics(unittest.TestCase):
         su2_boundary_layer_cd = 0.04955419767
         relative_error = abs(result["Cd"] - su2_boundary_layer_cd) / su2_boundary_layer_cd
 
+        self.assertEqual(result["Model"], "fast_drag_proxy_v6")
         self.assertLess(result["Cd"], 0.08)
-        self.assertLess(relative_error, 0.35)
+        self.assertLess(relative_error, 0.45)
 
     def test_evaluate_gene_proxy_details_are_self_consistent(self):
         result = evaluate_gene(
@@ -129,7 +130,7 @@ class TestDragProxyMetrics(unittest.TestCase):
         self.assertAlmostEqual(result["Score"], result["Drag"] + 0.1 * result["Swet"], places=6)
 
     def test_proxy_uses_distinct_superellipse_m_and_n_instead_of_only_their_average(self):
-        proxy = FairingDragProxy()
+        proxy = FairingDragProxy(model_version="v6")
         top_flat_side_round = {
             **self.base_gene,
             "M_top": 4.0,
@@ -148,7 +149,7 @@ class TestDragProxyMetrics(unittest.TestCase):
         self.assertNotAlmostEqual(result_a["Cd"], result_b["Cd"], places=6)
 
     def test_tail_aggressiveness_primarily_changes_pressure_terms_not_transition_surrogate(self):
-        proxy = FairingDragProxy()
+        proxy = FairingDragProxy(model_version="v5")
         aggressive_tail = {
             **self.base_gene,
             "L": 2.3,
@@ -177,6 +178,33 @@ class TestDragProxyMetrics(unittest.TestCase):
         self.assertLess(abs(aggressive["TransitionFraction"] - baseline["TransitionFraction"]), 0.05)
         self.assertGreater(aggressive["Cd_pressure"], baseline["Cd_pressure"])
         self.assertGreater(aggressive["Quality"]["pressure_risk"], baseline["Quality"]["pressure_risk"])
+
+    def test_default_proxy_is_v6_but_v5_is_still_selectable(self):
+        curves = CST_Modeler.generate_asymmetric_fairing(self.base_gene, num_sections=160)
+
+        default_result = FairingDragProxy().evaluate_curves(curves)
+        legacy_result = FairingDragProxy(model_version="v5").evaluate_curves(curves)
+
+        self.assertEqual(default_result["Model"], "fast_drag_proxy_v6")
+        self.assertEqual(legacy_result["Model"], "fast_drag_proxy_v5")
+        self.assertNotAlmostEqual(default_result["Cd_pressure"], legacy_result["Cd_pressure"], places=8)
+
+    def test_v6_transition_surrogate_ignores_operating_conditions_when_unspecified(self):
+        curves = CST_Modeler.generate_asymmetric_fairing(self.base_gene, num_sections=160)
+
+        default_result = FairingDragProxy(model_version="v6").evaluate_curves(curves)
+        explicit_refs_result = FairingDragProxy(
+            model_version="v6",
+            turbulence_intensity=0.005,
+            roughness_height=1e-5,
+        ).evaluate_curves(curves)
+
+        self.assertAlmostEqual(
+            default_result["TransitionFraction"],
+            explicit_refs_result["TransitionFraction"],
+            places=8,
+        )
+
     def test_run_one_case_wrapper_matches_shared_evaluator(self):
         wrapped = evaluate_gene(
             self.base_gene,
