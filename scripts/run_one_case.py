@@ -31,6 +31,7 @@ def evaluate_gene(
     name: str,
     W_area_penalty: float = 0.1,
     analysis_mode: str = "openvsp",
+    proxy_model: str = "v7",
     flow_conditions: dict | None = None,
     return_details: bool = False,
 ) -> float | dict:
@@ -46,6 +47,7 @@ def evaluate_gene(
         name,
         area_penalty=W_area_penalty,
         analysis_mode=analysis_mode,
+        proxy_model=proxy_model,
         flow_conditions=flow_conditions,
         return_details=return_details,
         logger=lambda message: print(message, file=sys.stderr),
@@ -62,6 +64,8 @@ def main():
                         help='面積懲罰因子 (N/m²)')
     parser.add_argument('--analysis-mode', choices=['openvsp', 'proxy'], default='openvsp',
                         help='阻力評估模式')
+    parser.add_argument('--proxy-model', choices=['v5', 'v6', 'v7', 'v8'], default='v7',
+                        help='proxy 模式下的模型版本')
 
     args = parser.parse_args()
 
@@ -75,7 +79,13 @@ def main():
         gene = json.loads(args.gene)
 
     # 評估
-    score = evaluate_gene(gene, args.name, args.penalty, analysis_mode=args.analysis_mode)
+    score = evaluate_gene(
+        gene,
+        args.name,
+        args.penalty,
+        analysis_mode=args.analysis_mode,
+        proxy_model=args.proxy_model,
+    )
 
     # 輸出分數到 stdout（這是主程式要讀取的）
     print(f"SCORE:{score}")

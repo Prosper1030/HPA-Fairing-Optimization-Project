@@ -225,6 +225,7 @@ def call_worker(
     name: str,
     W_area_penalty: float,
     analysis_mode: str,
+    proxy_model: str,
     flow_conditions: dict,
 ) -> float:
     """直接在常駐 worker 進程中評估單一個體。"""
@@ -235,6 +236,7 @@ def call_worker(
                 name,
                 W_area_penalty,
                 analysis_mode=analysis_mode,
+                proxy_model=proxy_model,
                 flow_conditions=flow_conditions,
             )
         )
@@ -250,6 +252,7 @@ def evaluate_population_parallel(
     n_workers,
     pm,
     analysis_mode,
+    proxy_model,
     flow_conditions,
     optimizer=None,
     executor=None,
@@ -278,7 +281,7 @@ def evaluate_population_parallel(
         for i, gene_array in enumerate(population):
             gene_dict = {k: gene_array[j] for j, k in enumerate(keys)}
             name = f"gen{gen:03d}_ind{i:03d}"
-            tasks.append((gene_dict, name, W_area_penalty, analysis_mode, flow_conditions))
+            tasks.append((gene_dict, name, W_area_penalty, analysis_mode, proxy_model, flow_conditions))
 
         ordered_fitness = [1e6] * len(tasks)
         future_to_index = {
@@ -287,7 +290,7 @@ def evaluate_population_parallel(
 
         for future in as_completed(future_to_index):
             index = future_to_index[future]
-            gene_dict, _, _, _, _ = tasks[index]
+            gene_dict, _, _, _, _, _ = tasks[index]
             try:
                 ordered_fitness[index] = future.result()
             except Exception as e:
@@ -356,6 +359,7 @@ def run_optimization(args):
     # 讀取面積懲罰因子
     W_area_penalty = config.get('fitness', {}).get('W_area_penalty', 0.1)
     analysis_mode = args.analysis_mode or config.get('fitness', {}).get('analysis_mode', 'proxy')
+    proxy_model = args.proxy_model or config.get('fitness', {}).get('proxy_model', 'v7')
     prepare_su2_shortlist = bool(getattr(args, 'prepare_su2_shortlist', False))
     su2_shortlist_top = int(getattr(args, 'su2_shortlist_top', 5) or 5)
     su2_shortlist_out = getattr(args, 'su2_shortlist_out', None)
@@ -377,6 +381,8 @@ def run_optimization(args):
     print(f"收斂容忍度: {convergence_tol} 代不改善則停止")
     print(f"面積懲罰因子: {W_area_penalty} N/m²")
     print(f"評估模式: {analysis_mode}")
+    if analysis_mode == 'proxy':
+        print(f"Proxy 模型: {proxy_model}")
     print(f"適應度公式: Score = Drag + {W_area_penalty} × Swet")
     print(f"平行運算: {n_workers} 進程" + (f"（可用上限: {max_workers}）" if n_workers > 1 else ""))
     print(f"SU2 shortlist: {'ON' if prepare_su2_shortlist else 'OFF'}" + (f"（top {su2_shortlist_top}）" if prepare_su2_shortlist else ""))
@@ -423,6 +429,7 @@ def run_optimization(args):
             pm,
             W_area_penalty=W_area_penalty,
             analysis_mode=analysis_mode,
+            proxy_model=proxy_model,
             flow_conditions=flow_conditions,
         )
         if n_workers == 1 else None
@@ -474,6 +481,7 @@ def run_optimization(args):
                 n_workers,
                 pm,
                 analysis_mode,
+                proxy_model,
                 flow_conditions,
                 optimizer,
                 executor,
@@ -601,6 +609,7 @@ def run_optimization(args):
         "best_design_summary",
         W_area_penalty,
         analysis_mode=analysis_mode,
+        proxy_model=proxy_model,
         flow_conditions=flow_conditions,
         return_details=True,
     )
@@ -618,6 +627,7 @@ def run_optimization(args):
         'best_fitness': best_fitness,
         'generation': callback.n_gen,
         'analysis_mode': analysis_mode,
+        'proxy_model': proxy_model,
         'best_analysis': best_analysis,
         'elapsed_seconds': elapsed,
         'timestamp': datetime.now().isoformat(),
@@ -688,6 +698,8 @@ def main():
     parser.add_argument('--resume', type=str, help='從 checkpoint.pkl 或其所在目錄續跑')
     parser.add_argument('--analysis-mode', choices=['openvsp', 'proxy'],
                         help='阻力評估模式（預設讀 config，否則 proxy）')
+    parser.add_argument('--proxy-model', choices=['v5', 'v6', 'v7', 'v8'],
+                        help='proxy 模式下的模型版本（預設讀 config，否則 v7）')
     parser.add_argument('--final-vsp', action='store_true',
                         help='完成後匯出最佳解的 .vsp3 模型（預設關閉）')
     parser.add_argument('--skip-final-vsp', action='store_true',

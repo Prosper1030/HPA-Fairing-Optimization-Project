@@ -60,6 +60,7 @@ def evaluate_design_gene(
     *,
     area_penalty: float = 0.1,
     analysis_mode: str = "openvsp",
+    proxy_model: str = "v7",
     flow_conditions: dict | None = None,
     return_details: bool = False,
     logger: Callable[[str], None] | None = None,
@@ -99,6 +100,7 @@ def evaluate_design_gene(
                 flow_conditions=normalized_flow,
                 preset="hpa",
                 backend="fast_proxy",
+                proxy_model=proxy_model,
             )
             scored = score_analysis_result(result, area_penalty)
             drag = scored["Drag"]

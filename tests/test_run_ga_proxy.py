@@ -56,6 +56,7 @@ class TestRunGaProxy(unittest.TestCase):
             fluid=os.path.join(PROJECT_ROOT, "config", "fluid_conditions.json"),
             resume=None,
             analysis_mode=None,
+            proxy_model=None,
             final_vsp=False,
             skip_final_vsp=False,
             prepare_su2_shortlist=False,
@@ -87,13 +88,14 @@ class TestRunGaProxy(unittest.TestCase):
         args = argparse.Namespace(
             gen=1,
             pop=4,
-            seed=11,
+            seed=7,
             tol=1,
             workers=1,
             config=os.path.join(PROJECT_ROOT, "config", "ga_config.json"),
             fluid=os.path.join(PROJECT_ROOT, "config", "fluid_conditions.json"),
             resume=None,
             analysis_mode=None,
+            proxy_model=None,
             final_vsp=False,
             skip_final_vsp=False,
             prepare_su2_shortlist=True,
@@ -127,6 +129,39 @@ class TestRunGaProxy(unittest.TestCase):
                     os.path.join(manifest_payload["Cases"][0]["CaseDir"], "su2_case.cfg")
                 )
             )
+        finally:
+            shutil.rmtree(pm.run_dir, ignore_errors=True)
+
+    def test_run_ga_proxy_can_override_proxy_model(self):
+        args = argparse.Namespace(
+            gen=1,
+            pop=4,
+            seed=13,
+            tol=1,
+            workers=1,
+            config=os.path.join(PROJECT_ROOT, "config", "ga_config.json"),
+            fluid=os.path.join(PROJECT_ROOT, "config", "fluid_conditions.json"),
+            resume=None,
+            analysis_mode="proxy",
+            proxy_model="v8",
+            final_vsp=False,
+            skip_final_vsp=True,
+            prepare_su2_shortlist=False,
+            su2_shortlist_top=5,
+            su2_shortlist_out=None,
+        )
+
+        result = run_ga.run_optimization(args)
+        self.assertIsNotNone(result)
+        _, pm, _ = result
+
+        try:
+            with open(pm.results_file, "r", encoding="utf-8") as handle:
+                results_payload = json.load(handle)
+
+            self.assertEqual(results_payload["analysis_mode"], "proxy")
+            self.assertEqual(results_payload["proxy_model"], "v8")
+            self.assertEqual(results_payload["best_analysis"]["Model"], "fast_drag_proxy_v8")
         finally:
             shutil.rmtree(pm.run_dir, ignore_errors=True)
 

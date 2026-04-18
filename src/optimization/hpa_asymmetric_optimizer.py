@@ -67,7 +67,7 @@ class ProjectManager:
         if existing_run_dir:
             self.run_dir = Path(existing_run_dir)
         else:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             self.run_dir = self.base_dir / f"hpa_run_{timestamp}"
 
         # 創建子目錄
@@ -835,10 +835,12 @@ class HPA_Optimizer:
         project_manager: ProjectManager,
         W_area_penalty: float = 0.1,
         analysis_mode: str = "openvsp",
+        proxy_model: str = "v7",
         flow_conditions: Dict | None = None,
     ):
         self.pm = project_manager
         self.analysis_mode = analysis_mode
+        self.proxy_model = proxy_model
         flow_conditions = flow_conditions or {}
         self.velocity = float(flow_conditions.get("velocity", 6.5))
         self.rho = float(flow_conditions.get("rho", 1.225))
@@ -850,6 +852,8 @@ class HPA_Optimizer:
         self.W_area_penalty = W_area_penalty
         self.pm.log(f"面積懲罰因子 W_area_penalty = {W_area_penalty} N/m²")
         self.pm.log(f"評估模式 = {self.analysis_mode}")
+        if self.analysis_mode == "proxy":
+            self.pm.log(f"proxy_model = {self.proxy_model}")
 
     def evaluate_individual(self, gene_array: np.ndarray, gen: int, ind: int) -> float:
         """
@@ -868,6 +872,7 @@ class HPA_Optimizer:
                 name,
                 area_penalty=self.W_area_penalty,
                 analysis_mode=self.analysis_mode,
+                proxy_model=self.proxy_model,
                 flow_conditions={
                     "velocity": self.velocity,
                     "rho": self.rho,
