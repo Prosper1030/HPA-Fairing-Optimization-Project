@@ -59,6 +59,28 @@ class TestDragProxyMetrics(unittest.TestCase):
             "w2": 0.35787314040559176,
             "w3": 0.050755819931282656,
         }
+        self.v8_best_gene = {
+            "L": 2.9399018072622938,
+            "W_max": 0.541544387581185,
+            "H_top_max": 0.8500811510703054,
+            "H_bot_max": 0.26096983513480354,
+            "N1": 0.8972443103846243,
+            "N2_top": 0.7601539888927857,
+            "N2_bot": 0.9440911069578535,
+            "X_max_pos": 0.33804717404485163,
+            "X_offset": 0.6195244152510936,
+            "M_top": 2.0356087082719094,
+            "N_top": 2.1075076473942826,
+            "M_bot": 2.015632226617622,
+            "N_bot": 2.460222924039834,
+            "tail_rise": 0.10549525917730586,
+            "blend_start": 0.6625835716376283,
+            "blend_power": 1.7458441736757573,
+            "w0": 0.1557907894557326,
+            "w1": 0.4432825353288791,
+            "w2": 0.38336454427625105,
+            "w3": 0.06367026794813055,
+        }
 
     def test_proxy_penalizes_aft_peak_and_reports_lower_laminar_fraction(self):
         proxy = FairingDragProxy(model_version="v5")
@@ -207,15 +229,18 @@ class TestDragProxyMetrics(unittest.TestCase):
         default_result = FairingDragProxy().evaluate_curves(curves)
         v6_result = FairingDragProxy(model_version="v6").evaluate_curves(curves)
         v8_result = FairingDragProxy(model_version="v8").evaluate_curves(curves)
+        v9_result = FairingDragProxy(model_version="v9").evaluate_curves(curves)
         legacy_result = FairingDragProxy(model_version="v5").evaluate_curves(curves)
 
         self.assertEqual(default_result["Model"], "fast_drag_proxy_v7")
         self.assertEqual(v6_result["Model"], "fast_drag_proxy_v6")
         self.assertEqual(v8_result["Model"], "fast_drag_proxy_v8")
+        self.assertEqual(v9_result["Model"], "fast_drag_proxy_v9")
         self.assertEqual(legacy_result["Model"], "fast_drag_proxy_v5")
         self.assertNotAlmostEqual(default_result["Cd_pressure"], v6_result["Cd_pressure"], places=8)
         self.assertNotAlmostEqual(v6_result["Cd_pressure"], legacy_result["Cd_pressure"], places=8)
         self.assertNotAlmostEqual(default_result["Cd"], v8_result["Cd"], places=8)
+        self.assertNotAlmostEqual(default_result["Cd"], v9_result["Cd"], places=8)
 
     def test_v7_transition_surrogate_ignores_operating_conditions_when_unspecified(self):
         curves = CST_Modeler.generate_asymmetric_fairing(self.base_gene, num_sections=160)
@@ -293,6 +318,52 @@ class TestDragProxyMetrics(unittest.TestCase):
         self.assertLess(v8_result["Calibration"]["blend"], 1e-6)
         self.assertAlmostEqual(v8_result["Calibration"]["factor"], 1.0, places=8)
         self.assertAlmostEqual(v8_result["Cd"], v7_result["Cd"], places=8)
+
+    def test_v9_tail_closure_anchor_moves_current_v8_best_toward_su2(self):
+        curves = CST_Modeler.generate_asymmetric_fairing(self.v8_best_gene, num_sections=160)
+        su2_cd = 0.02699590694
+
+        v7_result = FairingDragProxy(model_version="v7").evaluate_curves(curves)
+        v8_result = FairingDragProxy(model_version="v8").evaluate_curves(curves)
+        v9_result = FairingDragProxy(model_version="v9").evaluate_curves(curves)
+
+        v7_error = abs(v7_result["Cd"] - su2_cd) / su2_cd
+        v8_error = abs(v8_result["Cd"] - su2_cd) / su2_cd
+        v9_error = abs(v9_result["Cd"] - su2_cd) / su2_cd
+
+        self.assertGreater(v9_result["Calibration"]["factor"], 1.20)
+        self.assertLess(v9_error, v7_error)
+        self.assertLess(v9_error, v8_error)
+
+    def test_v9_tail_floor_stays_inactive_for_far_aggressive_shape(self):
+        aggressive_tail = {
+            **self.base_gene,
+            "L": 1.80,
+            "W_max": 0.65,
+            "H_top_max": 1.12,
+            "H_bot_max": 0.49,
+            "X_max_pos": 0.48,
+            "tail_rise": 0.19,
+            "blend_start": 0.84,
+            "blend_power": 2.9,
+            "M_top": 3.9,
+            "M_bot": 3.8,
+            "N_top": 2.2,
+            "N_bot": 2.2,
+            "w0": 0.16,
+            "w1": 0.26,
+            "w2": 0.38,
+            "w3": 0.20,
+        }
+        curves = CST_Modeler.generate_asymmetric_fairing(aggressive_tail, num_sections=160)
+
+        v7_result = FairingDragProxy(model_version="v7").evaluate_curves(curves)
+        v9_result = FairingDragProxy(model_version="v9").evaluate_curves(curves)
+
+        self.assertFalse(v9_result["Calibration"]["tail_floor_applied"])
+        self.assertLess(v9_result["Calibration"]["blend"], 1e-6)
+        self.assertAlmostEqual(v9_result["Calibration"]["factor"], 1.0, places=8)
+        self.assertAlmostEqual(v9_result["Cd"], v7_result["Cd"], places=8)
 
     def test_run_one_case_wrapper_matches_shared_evaluator(self):
         wrapped = evaluate_gene(

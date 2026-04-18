@@ -64,7 +64,7 @@ def main():
                         help='面積懲罰因子 (N/m²)')
     parser.add_argument('--analysis-mode', choices=['openvsp', 'proxy'], default='openvsp',
                         help='阻力評估模式')
-    parser.add_argument('--proxy-model', choices=['v5', 'v6', 'v7', 'v8'], default='v7',
+    parser.add_argument('--proxy-model', choices=['v5', 'v6', 'v7', 'v8', 'v9'], default='v7',
                         help='proxy 模式下的模型版本')
 
     args = parser.parse_args()

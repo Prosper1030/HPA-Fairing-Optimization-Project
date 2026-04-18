@@ -698,7 +698,7 @@ def main():
     parser.add_argument('--resume', type=str, help='從 checkpoint.pkl 或其所在目錄續跑')
     parser.add_argument('--analysis-mode', choices=['openvsp', 'proxy'],
                         help='阻力評估模式（預設讀 config，否則 proxy）')
-    parser.add_argument('--proxy-model', choices=['v5', 'v6', 'v7', 'v8'],
+    parser.add_argument('--proxy-model', choices=['v5', 'v6', 'v7', 'v8', 'v9'],
                         help='proxy 模式下的模型版本（預設讀 config，否則 v7）')
     parser.add_argument('--final-vsp', action='store_true',
                         help='完成後匯出最佳解的 .vsp3 模型（預設關閉）')

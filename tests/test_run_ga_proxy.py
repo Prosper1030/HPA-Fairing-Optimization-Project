@@ -143,7 +143,7 @@ class TestRunGaProxy(unittest.TestCase):
             fluid=os.path.join(PROJECT_ROOT, "config", "fluid_conditions.json"),
             resume=None,
             analysis_mode="proxy",
-            proxy_model="v8",
+            proxy_model="v9",
             final_vsp=False,
             skip_final_vsp=True,
             prepare_su2_shortlist=False,
@@ -160,8 +160,8 @@ class TestRunGaProxy(unittest.TestCase):
                 results_payload = json.load(handle)
 
             self.assertEqual(results_payload["analysis_mode"], "proxy")
-            self.assertEqual(results_payload["proxy_model"], "v8")
-            self.assertEqual(results_payload["best_analysis"]["Model"], "fast_drag_proxy_v8")
+            self.assertEqual(results_payload["proxy_model"], "v9")
+            self.assertEqual(results_payload["best_analysis"]["Model"], "fast_drag_proxy_v9")
         finally:
             shutil.rmtree(pm.run_dir, ignore_errors=True)
 
