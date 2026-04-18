@@ -87,6 +87,11 @@ class TestFairingAnalysis(unittest.TestCase):
 
         self.assertIn("Drag", analysis)
         self.assertIn("Cd", analysis)
+        self.assertEqual(analysis["Model"], "fast_drag_proxy_v7")
+
+    def test_analysis_can_explicitly_request_v6_proxy(self):
+        analysis = analyze_gene(self.gene, preset="none", proxy_model="v6")
+
         self.assertEqual(analysis["Model"], "fast_drag_proxy_v6")
 
     def test_analysis_can_explicitly_request_v5_proxy(self):

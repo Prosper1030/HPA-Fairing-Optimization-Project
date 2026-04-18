@@ -81,7 +81,7 @@ class TestDragProxyMetrics(unittest.TestCase):
         self.assertAlmostEqual(result["TransitionFraction"], result["LaminarFraction"], places=8)
 
     def test_proxy_best_gene_stays_near_boundary_layer_su2_scale(self):
-        proxy = FairingDragProxy(model_version="v6")
+        proxy = FairingDragProxy(model_version="v7")
         best_gene = {
             "L": 2.463576995012689,
             "W_max": 0.5401448192294462,
@@ -112,7 +112,7 @@ class TestDragProxyMetrics(unittest.TestCase):
         su2_boundary_layer_cd = 0.04955419767
         relative_error = abs(result["Cd"] - su2_boundary_layer_cd) / su2_boundary_layer_cd
 
-        self.assertEqual(result["Model"], "fast_drag_proxy_v6")
+        self.assertEqual(result["Model"], "fast_drag_proxy_v7")
         self.assertLess(result["Cd"], 0.08)
         self.assertLess(relative_error, 0.45)
 
@@ -130,7 +130,7 @@ class TestDragProxyMetrics(unittest.TestCase):
         self.assertAlmostEqual(result["Score"], result["Drag"] + 0.1 * result["Swet"], places=6)
 
     def test_proxy_uses_distinct_superellipse_m_and_n_instead_of_only_their_average(self):
-        proxy = FairingDragProxy(model_version="v6")
+        proxy = FairingDragProxy(model_version="v7")
         top_flat_side_round = {
             **self.base_gene,
             "M_top": 4.0,
@@ -179,22 +179,25 @@ class TestDragProxyMetrics(unittest.TestCase):
         self.assertGreater(aggressive["Cd_pressure"], baseline["Cd_pressure"])
         self.assertGreater(aggressive["Quality"]["pressure_risk"], baseline["Quality"]["pressure_risk"])
 
-    def test_default_proxy_is_v6_but_v5_is_still_selectable(self):
+    def test_default_proxy_is_v7_but_v6_and_v5_are_still_selectable(self):
         curves = CST_Modeler.generate_asymmetric_fairing(self.base_gene, num_sections=160)
 
         default_result = FairingDragProxy().evaluate_curves(curves)
+        v6_result = FairingDragProxy(model_version="v6").evaluate_curves(curves)
         legacy_result = FairingDragProxy(model_version="v5").evaluate_curves(curves)
 
-        self.assertEqual(default_result["Model"], "fast_drag_proxy_v6")
+        self.assertEqual(default_result["Model"], "fast_drag_proxy_v7")
+        self.assertEqual(v6_result["Model"], "fast_drag_proxy_v6")
         self.assertEqual(legacy_result["Model"], "fast_drag_proxy_v5")
-        self.assertNotAlmostEqual(default_result["Cd_pressure"], legacy_result["Cd_pressure"], places=8)
+        self.assertNotAlmostEqual(default_result["Cd_pressure"], v6_result["Cd_pressure"], places=8)
+        self.assertNotAlmostEqual(v6_result["Cd_pressure"], legacy_result["Cd_pressure"], places=8)
 
-    def test_v6_transition_surrogate_ignores_operating_conditions_when_unspecified(self):
+    def test_v7_transition_surrogate_ignores_operating_conditions_when_unspecified(self):
         curves = CST_Modeler.generate_asymmetric_fairing(self.base_gene, num_sections=160)
 
-        default_result = FairingDragProxy(model_version="v6").evaluate_curves(curves)
+        default_result = FairingDragProxy(model_version="v7").evaluate_curves(curves)
         explicit_refs_result = FairingDragProxy(
-            model_version="v6",
+            model_version="v7",
             turbulence_intensity=0.005,
             roughness_height=1e-5,
         ).evaluate_curves(curves)
@@ -204,6 +207,24 @@ class TestDragProxyMetrics(unittest.TestCase):
             explicit_refs_result["TransitionFraction"],
             places=8,
         )
+
+    def test_v7_reports_surface_weighted_laminar_fraction(self):
+        curves = CST_Modeler.generate_asymmetric_fairing(self.base_gene, num_sections=160)
+        result = FairingDragProxy(model_version="v7").evaluate_curves(curves)
+
+        self.assertIn("LaminarAreaFraction", result)
+        self.assertGreater(result["LaminarAreaFraction"], 0.0)
+        self.assertLessEqual(result["LaminarAreaFraction"], 1.0)
+        self.assertLessEqual(result["LaminarAreaFraction"], result["TransitionFraction"])
+
+    def test_v7_keeps_nonzero_attached_flow_cost_for_smooth_shape(self):
+        curves = CST_Modeler.generate_asymmetric_fairing(self.base_gene, num_sections=160)
+        v6_result = FairingDragProxy(model_version="v6").evaluate_curves(curves)
+        v7_result = FairingDragProxy(model_version="v7").evaluate_curves(curves)
+
+        self.assertGreater(v7_result["Cd_pressure"], 0.0)
+        self.assertGreater(v7_result["Cd_viscous"], v6_result["Cd_viscous"])
+        self.assertGreater(v7_result["Cd"], v6_result["Cd"])
 
     def test_run_one_case_wrapper_matches_shared_evaluator(self):
         wrapped = evaluate_gene(

@@ -29,7 +29,7 @@ DEFAULT_FLOW_CONDITIONS = {
 
 DEFAULT_ANALYSIS_CONFIG = {
     "backend": "fast_proxy",
-    "proxy_model": "v6",
+    "proxy_model": "v7",
     "preset": "none",
     "report": {
         "output_root": "output/analysis",
@@ -515,7 +515,7 @@ def analyze_gene(
     flow_conditions: dict | None = None,
     preset: str = "none",
     backend: str = "fast_proxy",
-    proxy_model: str = "v6",
+    proxy_model: str = "v7",
     include_geometry: bool = False,
 ) -> dict:
     if backend != "fast_proxy":
