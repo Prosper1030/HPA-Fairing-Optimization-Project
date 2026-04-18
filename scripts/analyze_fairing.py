@@ -86,7 +86,7 @@ def main() -> int:
     parser.add_argument("--out", help="報告輸出目錄")
     parser.add_argument("--preset", choices=["none", "hpa"], help="限制 preset（預設讀 analysis_config）")
     parser.add_argument("--backend", choices=["fast_proxy"], help="分析 backend（目前只支援 fast_proxy）")
-    parser.add_argument("--proxy-model", choices=["v5", "v6", "v7"], help="fast_proxy 的版本（預設讀 analysis_config）")
+    parser.add_argument("--proxy-model", choices=["v5", "v6", "v7", "v8"], help="fast_proxy 的版本（預設讀 analysis_config）")
     parser.add_argument("--write-example-gene", metavar="PATH", help="寫出一份可直接修改的範例 gene JSON 後結束")
     parser.add_argument("--show-required-fields", action="store_true", help="列出 gene 必填欄位與建議範圍後結束")
     parser.add_argument("--fill-missing-from-example", action="store_true", help="若 gene 缺欄位，使用範例 gene 的預設值補齊")

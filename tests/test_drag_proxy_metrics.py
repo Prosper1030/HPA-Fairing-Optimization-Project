@@ -37,6 +37,28 @@ class TestDragProxyMetrics(unittest.TestCase):
             "w2": 0.30,
             "w3": 0.10,
         }
+        self.v7_best_gene = {
+            "L": 2.828806591985072,
+            "W_max": 0.5341212363598906,
+            "H_top_max": 0.8507129826582426,
+            "H_bot_max": 0.2607630635524523,
+            "N1": 0.8995455328544454,
+            "N2_top": 0.9819192231873867,
+            "N2_bot": 0.7907158655805717,
+            "X_max_pos": 0.3643890987737485,
+            "X_offset": 0.6078884129880086,
+            "M_top": 2.0021852058203873,
+            "N_top": 2.028808871553711,
+            "M_bot": 2.007321105470481,
+            "N_bot": 2.021742493504909,
+            "tail_rise": 0.10934525233257308,
+            "blend_start": 0.6538349048599497,
+            "blend_power": 1.9011250655299892,
+            "w0": 0.1503535786702696,
+            "w1": 0.44702560862028085,
+            "w2": 0.35787314040559176,
+            "w3": 0.050755819931282656,
+        }
 
     def test_proxy_penalizes_aft_peak_and_reports_lower_laminar_fraction(self):
         proxy = FairingDragProxy(model_version="v5")
@@ -184,13 +206,16 @@ class TestDragProxyMetrics(unittest.TestCase):
 
         default_result = FairingDragProxy().evaluate_curves(curves)
         v6_result = FairingDragProxy(model_version="v6").evaluate_curves(curves)
+        v8_result = FairingDragProxy(model_version="v8").evaluate_curves(curves)
         legacy_result = FairingDragProxy(model_version="v5").evaluate_curves(curves)
 
         self.assertEqual(default_result["Model"], "fast_drag_proxy_v7")
         self.assertEqual(v6_result["Model"], "fast_drag_proxy_v6")
+        self.assertEqual(v8_result["Model"], "fast_drag_proxy_v8")
         self.assertEqual(legacy_result["Model"], "fast_drag_proxy_v5")
         self.assertNotAlmostEqual(default_result["Cd_pressure"], v6_result["Cd_pressure"], places=8)
         self.assertNotAlmostEqual(v6_result["Cd_pressure"], legacy_result["Cd_pressure"], places=8)
+        self.assertNotAlmostEqual(default_result["Cd"], v8_result["Cd"], places=8)
 
     def test_v7_transition_surrogate_ignores_operating_conditions_when_unspecified(self):
         curves = CST_Modeler.generate_asymmetric_fairing(self.base_gene, num_sections=160)
@@ -225,6 +250,49 @@ class TestDragProxyMetrics(unittest.TestCase):
         self.assertGreater(v7_result["Cd_pressure"], 0.0)
         self.assertGreater(v7_result["Cd_viscous"], v6_result["Cd_viscous"])
         self.assertGreater(v7_result["Cd"], v6_result["Cd"])
+
+    def test_v8_trust_region_moves_current_best_toward_converged_su2(self):
+        curves = CST_Modeler.generate_asymmetric_fairing(self.v7_best_gene, num_sections=160)
+        su2_cd = 0.02197176052
+
+        v7_result = FairingDragProxy(model_version="v7").evaluate_curves(curves)
+        v8_result = FairingDragProxy(model_version="v8").evaluate_curves(curves)
+
+        v7_error = abs(v7_result["Cd"] - su2_cd) / su2_cd
+        v8_error = abs(v8_result["Cd"] - su2_cd) / su2_cd
+
+        self.assertGreater(v8_result["Calibration"]["factor"], 1.0)
+        self.assertGreater(v8_result["Calibration"]["blend"], 0.5)
+        self.assertLess(v8_error, v7_error)
+
+    def test_v8_trust_region_stays_inactive_for_far_aggressive_shape(self):
+        aggressive_tail = {
+            **self.base_gene,
+            "L": 1.80,
+            "W_max": 0.65,
+            "H_top_max": 1.12,
+            "H_bot_max": 0.49,
+            "X_max_pos": 0.48,
+            "tail_rise": 0.19,
+            "blend_start": 0.84,
+            "blend_power": 2.9,
+            "M_top": 3.9,
+            "M_bot": 3.8,
+            "N_top": 2.2,
+            "N_bot": 2.2,
+            "w0": 0.16,
+            "w1": 0.26,
+            "w2": 0.38,
+            "w3": 0.20,
+        }
+        curves = CST_Modeler.generate_asymmetric_fairing(aggressive_tail, num_sections=160)
+
+        v7_result = FairingDragProxy(model_version="v7").evaluate_curves(curves)
+        v8_result = FairingDragProxy(model_version="v8").evaluate_curves(curves)
+
+        self.assertLess(v8_result["Calibration"]["blend"], 1e-6)
+        self.assertAlmostEqual(v8_result["Calibration"]["factor"], 1.0, places=8)
+        self.assertAlmostEqual(v8_result["Cd"], v7_result["Cd"], places=8)
 
     def test_run_one_case_wrapper_matches_shared_evaluator(self):
         wrapped = evaluate_gene(

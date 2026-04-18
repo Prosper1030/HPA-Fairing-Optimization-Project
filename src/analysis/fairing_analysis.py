@@ -555,6 +555,8 @@ def analyze_gene(
         "FlowConditions": normalized_flow,
         "Model": proxy_result["Model"],
     }
+    if "Calibration" in proxy_result:
+        result["Calibration"] = proxy_result["Calibration"]
 
     result["Recommendations"] = generate_recommendations(result)
     result.update(build_representative_case_metadata(result))

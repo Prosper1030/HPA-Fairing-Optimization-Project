@@ -99,6 +99,13 @@ class TestFairingAnalysis(unittest.TestCase):
 
         self.assertEqual(analysis["Model"], "fast_drag_proxy_v5")
 
+    def test_analysis_can_explicitly_request_v8_proxy(self):
+        analysis = analyze_gene(self.gene, preset="none", proxy_model="v8")
+
+        self.assertEqual(analysis["Model"], "fast_drag_proxy_v8")
+        self.assertIn("Calibration", analysis)
+        self.assertEqual(analysis["Calibration"]["mode"], "local_trust_region_v8")
+
     def test_analysis_reports_representative_tags(self):
         aggressive_gene = {
             **self.gene,

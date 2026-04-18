@@ -21,6 +21,43 @@ from math import pi
 import numpy as np
 
 
+_V8_TRUST_REGION_ANCHORS = (
+    {
+        "name": "v5_best_reinterpreted_with_v7",
+        "fineness_ratio": 3.6946282161783834,
+        "x_peak_area_frac": 0.3226975564787321,
+        "pressure_risk": 0.23096765281312692,
+        "cd_ratio": 0.9360992354310164,
+    },
+    {
+        "name": "v6_best_reinterpreted_with_v7",
+        "fineness_ratio": 3.6787417269431812,
+        "x_peak_area_frac": 0.2856537192984729,
+        "pressure_risk": 0.1849781445507167,
+        "cd_ratio": 1.071909999013221,
+    },
+    {
+        "name": "v7_best_converged_su2",
+        "fineness_ratio": 3.669185987689221,
+        "x_peak_area_frac": 0.3226975564787321,
+        "pressure_risk": 0.33281944146160747,
+        "cd_ratio": 1.1221868586072885,
+    },
+    {
+        "name": "mid_pack_example_baseline_su2",
+        "fineness_ratio": 2.7303431053477443,
+        "x_peak_area_frac": 0.2856537192984729,
+        "pressure_risk": 0.2873774242159004,
+        "cd_ratio": 0.9661997866636765,
+    },
+)
+
+_V8_TRUST_REGION_FEATURE_SCALE = np.array([0.15, 0.04, 0.10], dtype=float)
+_V8_TRUST_REGION_KERNEL_WIDTH = 0.50
+_V8_TRUST_REGION_RATIO_MIN = 0.90
+_V8_TRUST_REGION_RATIO_MAX = 1.18
+
+
 def _clip01(value: float) -> float:
     return float(np.clip(value, 0.0, 1.0))
 
@@ -84,7 +121,7 @@ class FairingDragProxy:
         self.s_ref = float(s_ref)
         self.q = 0.5 * self.rho * (self.velocity ** 2)
         normalized_version = str(model_version).strip().lower()
-        if normalized_version not in {"v5", "v6", "v7"}:
+        if normalized_version not in {"v5", "v6", "v7", "v8"}:
             raise ValueError(f"Unsupported proxy model_version: {model_version}")
         self.model_version = normalized_version
         self.turbulence_intensity = (
@@ -623,6 +660,8 @@ class FairingDragProxy:
             return self._estimate_transition_fraction_v5(metrics)
         if self.model_version == "v6":
             return self._estimate_transition_fraction_v6(metrics)
+        if self.model_version in {"v7", "v8"}:
+            return self._estimate_transition_fraction_v7(metrics)
         return self._estimate_transition_fraction_v7(metrics)
 
     @staticmethod
@@ -647,7 +686,7 @@ class FairingDragProxy:
         laminar_area_fraction: float | None = None,
     ) -> float:
         re_total = metrics.reynolds_number
-        if self.model_version == "v7":
+        if self.model_version in {"v7", "v8"}:
             x_t_star = float(np.clip(laminar_fraction, 1e-4, 0.999999))
             phi_s = float(
                 np.clip(
@@ -678,7 +717,7 @@ class FairingDragProxy:
         # Hoerner streamlined body form factor, matching a common preliminary
         # design choice and OpenVSP's default body model.
         fr = max(metrics.fineness_ratio, 1.0)
-        if self.model_version != "v7":
+        if self.model_version not in {"v7", "v8"}:
             return float(1.0 + 1.5 / (fr ** 1.5) + 7.0 / (fr ** 3.0))
 
         a_1 = 1.5
@@ -795,11 +834,72 @@ class FairingDragProxy:
         )
         return pressure_cd, float(pressure_risk), float(tail_state_factor)
 
+    def _estimate_v8_calibration(
+        self,
+        metrics: ProxyMetrics,
+        pressure_risk: float,
+    ) -> dict[str, float | list[str]]:
+        anchor_feature_matrix = np.array(
+            [
+                [
+                    anchor["fineness_ratio"],
+                    anchor["x_peak_area_frac"],
+                    anchor["pressure_risk"],
+                ]
+                for anchor in _V8_TRUST_REGION_ANCHORS
+            ],
+            dtype=float,
+        )
+        anchor_residuals = np.array(
+            [float(anchor["cd_ratio"]) - 1.0 for anchor in _V8_TRUST_REGION_ANCHORS],
+            dtype=float,
+        )
+        feature_vector = np.array(
+            [
+                float(metrics.fineness_ratio),
+                float(metrics.x_peak_area_frac),
+                float(pressure_risk),
+            ],
+            dtype=float,
+        )
+
+        normalized_delta = (anchor_feature_matrix - feature_vector) / _V8_TRUST_REGION_FEATURE_SCALE
+        distances = np.linalg.norm(normalized_delta, axis=1)
+        weights = np.exp(-((distances / _V8_TRUST_REGION_KERNEL_WIDTH) ** 2))
+        total_weight = float(np.sum(weights))
+        if total_weight <= 1e-12:
+            return {
+                "factor": 1.0,
+                "blend": 0.0,
+                "min_distance": float(np.min(distances)),
+                "weighted_residual": 0.0,
+                "anchor_names": [str(anchor["name"]) for anchor in _V8_TRUST_REGION_ANCHORS],
+            }
+
+        weighted_residual = float(np.dot(weights, anchor_residuals) / total_weight)
+        blend = float(min(1.0, total_weight))
+        factor = float(
+            np.clip(
+                1.0 + blend * weighted_residual,
+                _V8_TRUST_REGION_RATIO_MIN,
+                _V8_TRUST_REGION_RATIO_MAX,
+            )
+        )
+        return {
+            "factor": factor,
+            "blend": blend,
+            "min_distance": float(np.min(distances)),
+            "weighted_residual": weighted_residual,
+            "anchor_names": [str(anchor["name"]) for anchor in _V8_TRUST_REGION_ANCHORS],
+        }
+
     def estimate_pressure_cd(self, metrics: ProxyMetrics, laminar_fraction: float) -> tuple[float, float, float]:
         if self.model_version == "v5":
             return self._estimate_pressure_cd_v5(metrics, laminar_fraction)
         if self.model_version == "v6":
             return self._estimate_pressure_cd_v6(metrics, laminar_fraction)
+        if self.model_version in {"v7", "v8"}:
+            return self._estimate_pressure_cd_v7(metrics, laminar_fraction)
         return self._estimate_pressure_cd_v7(metrics, laminar_fraction)
 
     def evaluate_curves(self, curves: dict) -> dict:
@@ -807,13 +907,27 @@ class FairingDragProxy:
         transition_fraction = self.estimate_laminar_fraction(metrics)
         laminar_area_fraction = (
             self.estimate_laminar_area_fraction(metrics, transition_fraction)
-            if self.model_version == "v7"
+            if self.model_version in {"v7", "v8"}
             else transition_fraction
         )
         cf_mix = self.estimate_skin_friction_cf(metrics, transition_fraction, laminar_area_fraction)
         form_factor = self.estimate_form_factor(metrics)
         cd_viscous = metrics.swet * cf_mix * form_factor / self.s_ref
         cd_pressure, pressure_risk, transition_multiplier = self.estimate_pressure_cd(metrics, transition_fraction)
+        calibration_factor = 1.0
+        calibration_blend = 0.0
+        calibration_min_distance = 0.0
+        calibration_weighted_residual = 0.0
+        calibration_anchor_names: list[str] = []
+        if self.model_version == "v8":
+            calibration = self._estimate_v8_calibration(metrics, pressure_risk)
+            calibration_factor = float(calibration["factor"])
+            calibration_blend = float(calibration["blend"])
+            calibration_min_distance = float(calibration["min_distance"])
+            calibration_weighted_residual = float(calibration["weighted_residual"])
+            calibration_anchor_names = list(calibration["anchor_names"])
+            cd_viscous *= calibration_factor
+            cd_pressure *= calibration_factor
         cd_total = cd_viscous + cd_pressure
         drag_force = self.q * cd_total * self.s_ref
         model_name = f"fast_drag_proxy_{self.model_version}"
@@ -831,6 +945,14 @@ class FairingDragProxy:
             "TransitionLocationFraction": float(transition_fraction),
             "LaminarAreaFraction": float(laminar_area_fraction),
             "TransitionTailMultiplier": float(transition_multiplier),
+            "Calibration": {
+                "mode": "local_trust_region_v8" if self.model_version == "v8" else "none",
+                "factor": float(calibration_factor),
+                "blend": float(calibration_blend),
+                "min_distance": float(calibration_min_distance),
+                "weighted_residual": float(calibration_weighted_residual),
+                "anchor_names": calibration_anchor_names,
+            },
             "FinenessRatio": float(metrics.fineness_ratio),
             "XPeakAreaFrac": float(metrics.x_peak_area_frac),
             "TailAngles": {
