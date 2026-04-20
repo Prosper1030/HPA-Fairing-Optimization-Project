@@ -35,6 +35,25 @@ _hpa_append_path_var() {
     fi
 }
 
+_hpa_prepend_path_var() {
+    var_name="$1"
+    candidate="$2"
+
+    [ -n "$candidate" ] || return 0
+    [ -e "$candidate" ] || return 0
+
+    eval "current_value=\${$var_name:-}"
+    case ":$current_value:" in
+        *":$candidate:"*) return 0 ;;
+    esac
+
+    if [ -n "$current_value" ]; then
+        eval "export $var_name=\"\$candidate:\$current_value\""
+    else
+        eval "export $var_name=\"\$candidate\""
+    fi
+}
+
 _hpa_is_sourced() {
     if [ -n "${BASH_VERSION:-}" ] && [ "${BASH_SOURCE:-$0}" != "$0" ]; then
         return 0
@@ -237,8 +256,10 @@ fi
 
 LOCAL_SU2_BIN=$(_hpa_discover_local_su2_bin 2>/dev/null || true)
 if [ -n "$LOCAL_SU2_BIN" ]; then
-    _hpa_append_path_var PATH "$LOCAL_SU2_BIN"
-    _hpa_append_path_var PYTHONPATH "$LOCAL_SU2_BIN"
+    LOCAL_SU2_HOME=$(dirname "$LOCAL_SU2_BIN")
+    _hpa_prepend_path_var PATH "$LOCAL_SU2_BIN"
+    _hpa_prepend_path_var PYTHONPATH "$LOCAL_SU2_BIN"
+    export SU2_HOME="$LOCAL_SU2_HOME"
     export SU2_RUN="$LOCAL_SU2_BIN"
     _hpa_note "Detected local SU2 tools under: $LOCAL_SU2_BIN"
 fi
