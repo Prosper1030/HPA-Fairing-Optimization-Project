@@ -163,6 +163,23 @@ _hpa_discover_local_su2_bin() {
     return 1
 }
 
+_hpa_discover_shared_mpich_bin() {
+    if [ -n "${MPICH_HOME:-}" ] && [ -x "${MPICH_HOME}/bin/mpirun" ]; then
+        printf '%s\n' "${MPICH_HOME}/bin"
+        return 0
+    fi
+
+    for candidate in "$HOME/.local/opt/mpich/current/bin" "$HOME/.local/opt/mpich"/*/bin; do
+        [ -d "$candidate" ] || continue
+        if [ -x "$candidate/mpirun" ]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 _hpa_python_has_module() {
     module_name="$1"
 
@@ -252,6 +269,15 @@ else
         _hpa_append_path_var PATH "$(dirname "$(dirname "$OPENVSP_ROOT")")/MacOS"
         _hpa_note "Detected OpenVSP Python API under: $OPENVSP_ROOT"
     fi
+fi
+
+LOCAL_MPICH_BIN=$(_hpa_discover_shared_mpich_bin 2>/dev/null || true)
+if [ -n "$LOCAL_MPICH_BIN" ]; then
+    LOCAL_MPICH_HOME=$(dirname "$LOCAL_MPICH_BIN")
+    _hpa_prepend_path_var PATH "$LOCAL_MPICH_BIN"
+    export MPICH_HOME="$LOCAL_MPICH_HOME"
+    export MPIEXEC="$LOCAL_MPICH_BIN/mpirun"
+    _hpa_note "Detected shared MPICH tools under: $LOCAL_MPICH_BIN"
 fi
 
 LOCAL_SU2_BIN=$(_hpa_discover_local_su2_bin 2>/dev/null || true)
