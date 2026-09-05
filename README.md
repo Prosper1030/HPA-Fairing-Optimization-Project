@@ -103,6 +103,13 @@ the record of what each correction changed.
 Consequently the git history (89 commits) is shorter than the work it represents. The repository
 is best read as the consolidated result of the thesis work rather than as a record of it.
 
+**On ordering:** this repository was created on 2026-04-11, five days *after* the main
+[`hpa-mdo`](https://github.com/Prosper1030/hpa-mdo) framework repository. The conceptual
+dependency still runs the other way — the two-tier fidelity pattern (cheap model in the loop,
+expensive model on the survivors) was worked out on this self-contained problem and then
+generalized. The overlap reflects when each was committed to version control, not when each was
+worked out.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
