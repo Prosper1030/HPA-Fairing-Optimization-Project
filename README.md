@@ -4,8 +4,9 @@
 CST shape parameterization → fast drag surrogate → genetic-algorithm search → SU2 RANS
 validation of the shortlist.
 
-Related to the undergraduate thesis *Analysis of Fairing Shapes for a Human-Powered Aircraft*,
-Department of Aeronautics and Astronautics, National Cheng Kung University.
+Grew out of the undergraduate thesis *Analysis of Fairing Shapes for a Human-Powered Aircraft*,
+Department of Aeronautics and Astronautics, National Cheng Kung University — and continued past
+it. See [Thesis work vs. later development](#thesis-work-vs-later-development).
 
 Part of the [HPA-MDO project](https://github.com/Prosper1030/hpa-mdo-framework) —
 **start there** for how this fits the wider work.
@@ -69,10 +70,17 @@ shoulder and tail-length constraints of the actual aircraft).
 
 Read this before treating any number here as an aerodynamic result.
 
-- **The surrogate is trust-region corrected, not globally validated.** It went through four
-  correction rounds (v6 → v9), each with a written review packet under `docs/`. The corrections
-  are local: the model is calibrated within the region sampled, and its accuracy outside that
-  region is not characterized.
+- **The surrogate is trust-region corrected, not globally validated.** The drag proxy exists in
+  versions v5 through v9, with earlier versions retained rather than replaced and cross-version
+  compatibility tests in `tests/`. The corrections are *local*: the model is calibrated within
+  the region sampled around a set of anchor designs, and its accuracy outside that region is not
+  characterized. v8 and v9 add explicit trust-region kernels with bounded correction ratios
+  (v8: 0.90–1.18; v9: 0.90–1.45) — the bound is the admission that the correction is not trusted
+  to extrapolate.
+- **Three review documents exist, not one per version.** `docs/PROXY_MODEL_REVIEW_PACKET.md`,
+  `docs/PROXY_V6_REVIEW_PACKET.md`, and
+  `docs/OUTER_LOOP_FAST_ACCURACY_REVIEW_PACKET.md`. v7, v8 and v9 have no dedicated review
+  document; their rationale lives in the code and commit history.
 - **This is why SU2 exists in the workflow at all.** The GA output is a *shortlist* — a set of
   candidates worth checking — not a ranked answer. Reading the GA ranking as final would be
   using the surrogate outside what its calibration supports.
@@ -83,7 +91,8 @@ Read this before treating any number here as an aerodynamic result.
 - **OpenVSP is now a benchmark and fallback tool**, not the main analysis path. It was the
   original backend; the surrogate replaced it in the loop for speed.
 
-Standard test suite:
+Standard test suite — **53 tests, all passing, 6 skipped** (verified 2026-09-05,
+Python 3.11 / numpy 2.4.3):
 
 ```bash
 python3 -m unittest \
@@ -93,22 +102,40 @@ python3 -m unittest \
   tests.test_run_ga_proxy
 ```
 
-## Repository layout note
+## Thesis work vs. later development
 
-`archive/` holds superseded source, documentation and tests from before this work was brought
-under version control — 114 of 192 tracked files. It is kept deliberately: the surrogate
-corrections v6 → v9 were made *against* those earlier versions, and deleting them would remove
-the record of what each correction changed.
+Stated precisely, because the repository dates do not by themselves show where the thesis ended.
 
-Consequently the git history (89 commits) is shorter than the work it represents. The repository
-is best read as the consolidated result of the thesis work rather than as a record of it.
+**This repository is not a record of the thesis.** It was created on **2026-04-11** by importing
+existing work that had been developed outside version control and reorganizing it. Every file in
+`archive/` — 114 of 192 tracked files, holding the superseded source, docs and tests — carries
+that import date, not its authoring date. The entire git history spans **2026-04-11 to
+2026-04-20**, nine days, all of it at or after that consolidation.
 
-**On ordering:** this repository was created on 2026-04-11, five days *after* the main
-[`hpa-mdo`](https://github.com/Prosper1030/hpa-mdo) framework repository. The conceptual
-dependency still runs the other way — the two-tier fidelity pattern (cheap model in the loop,
-expensive model on the survivors) was worked out on this self-contained problem and then
-generalized. The overlap reflects when each was committed to version control, not when each was
-worked out.
+So the git log is best read as *"what happened once the work was put under version control"*,
+not as the development record of the thesis itself.
+
+What the history does show clearly:
+
+| Period | Content |
+|---|---|
+| Before git | Thesis work on fairing shape analysis. Survives as `archive/` plus the initial import. |
+| 2026-04-11 → 2026-04-17 | Consolidation and rebuild: geometry parameterization core rebuilt, gene interface reorganized, fast drag proxy introduced, representative-case generator, SU2 batch tooling, geometry preview fixes. |
+| **2026-04-18 → 2026-04-20** | **Later development, beyond the thesis.** Proxy **v6 → v9**, including the v8/v9 trust-region corrections; GA `proxy_model` selection; `activate_env` SU2/MPICH fixes. |
+
+**The v6–v9 proxy work and its review documents are later development, not thesis content.**
+Treat them as continued work on the same problem after the thesis, which is what the dates
+support.
+
+`archive/` is kept deliberately: the surrogate corrections were made *against* those earlier
+versions, and deleting them would remove the record of what each correction changed.
+
+**On repository ordering:** this repository was created five days *after* the main
+[`hpa-mdo`](https://github.com/Prosper1030/hpa-mdo) framework repository (2026-04-06). The
+conceptual dependency still runs the other way — the two-tier fidelity pattern (cheap model in
+the loop, expensive model on the survivors) was worked out on this self-contained problem and
+then generalized. The overlap reflects when each was committed to version control, not when each
+was worked out.
 
 ## License
 
