@@ -1,5 +1,118 @@
 # HPA Fairing Optimization Project
 
+**Aerodynamic shape optimization of a pilot fairing for a human-powered aircraft.**
+CST shape parameterization → fast drag surrogate → genetic-algorithm search → SU2 RANS
+validation of the shortlist.
+
+Related to the undergraduate thesis *Analysis of Fairing Shapes for a Human-Powered Aircraft*,
+Department of Aeronautics and Astronautics, National Cheng Kung University.
+
+Part of the [HPA-MDO project](https://github.com/Prosper1030/hpa-mdo-framework) —
+**start there** for how this fits the wider work.
+
+---
+
+## The problem
+
+A human-powered aircraft cruises at ~6.5 m/s on roughly 300 W of sustained human power. The
+pilot fairing is a meaningful fraction of parasitic drag, and — unlike the wing — it is
+aerodynamically **self-contained**: its shape does not feed back into the structural or
+aeroelastic problem. That makes it the right place to develop a shape-optimization method
+before attempting the coupled aircraft problem.
+
+## Method
+
+**1 — Parameterization.** Class-shape transformation (CST) with a 20-parameter gene: length,
+maximum width, upper and lower maximum heights, class exponents `N1`/`N2`, peak position and
+offset, per-surface shape exponents, tail rise, blend start and power, and four Bernstein weight
+terms. One JSON file describes one candidate shape.
+
+**2 — Fast surrogate (`fast_proxy`), the main analysis path.** Rather than returning a single
+drag number, it decomposes the estimate and reports what drives it:
+
+| Output | Meaning |
+|---|---|
+| `Cd`, `Cd_viscous`, `Cd_pressure` | Drag coefficient and its split |
+| `Swet` | Wetted area |
+| `LaminarFraction` | Estimated laminar run |
+| `XPeakAreaFrac` | Chordwise position of maximum cross-section |
+| `TailAngles`, `Quality` | Tail closure geometry and shape-quality flags |
+| `Recommendations` | Natural-language design guidance, e.g. move the maximum section forward, ease the lower tail contraction, reduce wetted area |
+| `ConstraintReport` | Which geometric/ergonomic constraints a candidate violates |
+
+Interpretability was a design requirement: an optimizer that says "this is 3% better" without
+saying *why* teaches nothing about the design space.
+
+**3 — Search.** Genetic algorithm (`pymoo`) over the gene, using the surrogate as the fitness
+function. Every evaluated candidate is logged to `logs/candidate_scores.jsonl`, so the search
+history is inspectable rather than discarded.
+
+**4 — High-fidelity validation.** SU2 RANS is a **shortlist validator, not an inner-loop
+evaluator**. The GA produces a ranked set; the top *N* are packaged into runnable SU2 cases with
+generated meshes (`--prepare-su2-shortlist`). SU2 never runs inside a GA generation.
+
+This two-tier split — cheap model inside the loop, expensive model on the survivors — is the
+pattern that was later generalized to the whole aircraft in the main HPA-MDO framework.
+
+## Quick start
+
+```bash
+source activate_env.sh                                    # macOS / Linux
+python scripts/analyze_fairing.py --write-example-gene example_gene.json
+python scripts/analyze_fairing.py --gene example_gene.json
+```
+
+Presets: `none` (bare low-speed fairing aerodynamics) or `hpa` (adds the cockpit, pedal,
+shoulder and tail-length constraints of the actual aircraft).
+
+## Validation status
+
+Read this before treating any number here as an aerodynamic result.
+
+- **The surrogate is trust-region corrected, not globally validated.** It went through four
+  correction rounds (v6 → v9), each with a written review packet under `docs/`. The corrections
+  are local: the model is calibrated within the region sampled, and its accuracy outside that
+  region is not characterized.
+- **This is why SU2 exists in the workflow at all.** The GA output is a *shortlist* — a set of
+  candidates worth checking — not a ranked answer. Reading the GA ranking as final would be
+  using the surrogate outside what its calibration supports.
+- **An opt-in surrogate-vs-OpenVSP benchmark** (`tests/experimental/benchmark_proxy_vs_vsp.py`)
+  compares against OpenVSP's parasitic-drag build-up where OpenVSP is installed locally. It is
+  a cross-check against another low-order method, **not** experimental validation.
+- **No wind-tunnel or flight data.** Nothing here has been compared against measurement.
+- **OpenVSP is now a benchmark and fallback tool**, not the main analysis path. It was the
+  original backend; the surrogate replaced it in the loop for speed.
+
+Standard test suite:
+
+```bash
+python3 -m unittest \
+  tests.test_high_fidelity_validator tests.test_fairing_analysis \
+  tests.test_drag_proxy_metrics tests.test_geometry_peak_position \
+  tests.test_project_manager_serialization tests.test_su2_axisymmetric_mesh \
+  tests.test_run_ga_proxy
+```
+
+## Repository layout note
+
+`archive/` holds superseded source, documentation and tests from before this work was brought
+under version control — 114 of 192 tracked files. It is kept deliberately: the surrogate
+corrections v6 → v9 were made *against* those earlier versions, and deleting them would remove
+the record of what each correction changed.
+
+Consequently the git history (89 commits) is shorter than the work it represents. The repository
+is best read as the consolidated result of the thesis work rather than as a record of it.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+---
+
+# 詳細說明（繁體中文）
+
+以下為原有的完整操作與開發文件，維持繁體中文。
+
 **低速整流罩快速分析工具，支援後續接 GA 與高保真驗證**
 
 本專案目前的主線已從「OpenVSP 驅動的 GA 優化」調整為「快速代理分析為主，GA 與高保真驗證為延伸能力」。
